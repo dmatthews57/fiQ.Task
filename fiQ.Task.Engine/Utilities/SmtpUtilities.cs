@@ -6,6 +6,12 @@ using Microsoft.Extensions.Options;
 
 namespace fiQ.Task.Utilities
 {
+	/// <summary>
+	/// Utility class for wrapping SMTP client and performing simple outbound email sending
+	/// </summary>
+	/// <remarks>
+	/// Requires an SmtpOptions configuration and logger having been registered in ServiceCollection
+	/// </remarks>
 	public class SmtpUtilities : IDisposable
 	{
 		#region Fields and constructors
@@ -55,28 +61,22 @@ namespace fiQ.Task.Utilities
 		{
 			try
 			{
-				if (smtpClient != null)
+				if (smtpClient == null) throw new InvalidOperationException("Client not initialized (configuration may be missing)");
+				using (var mailMessage = new MailMessage
 				{
-					using (var mailMessage = new MailMessage
+					From = new MailAddress(string.IsNullOrEmpty(messageFrom) ? options.DefaultFrom : messageFrom),
+					Subject = messageSubject,
+					Body = messageBody,
+					IsBodyHtml = true
+				})
+				{
+					mailMessage.To.Add((string.IsNullOrEmpty(messageTo) ? options.DefaultTo : messageTo).Replace(";", ","));
+					if (attachment != null)
 					{
-						From = new MailAddress(string.IsNullOrEmpty(messageFrom) ? options.DefaultFrom : messageFrom),
-						Subject = messageSubject,
-						Body = messageBody,
-						IsBodyHtml = true
-					})
-					{
-						mailMessage.To.Add((string.IsNullOrEmpty(messageTo) ? options.DefaultTo : messageTo).Replace(";", ","));
-						if (attachment != null)
-						{
-							mailMessage.Attachments.Add(new Attachment(attachment, attachmentName));
-						}
-						smtpClient.Send(mailMessage);
-						return true;
+						mailMessage.Attachments.Add(new Attachment(attachment, attachmentName));
 					}
-				}
-				else
-				{
-					logger.LogError("SMTP client not initialized");
+					smtpClient.Send(mailMessage);
+					return true;
 				}
 			}
 			catch (Exception ex)

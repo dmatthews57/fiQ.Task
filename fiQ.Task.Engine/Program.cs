@@ -44,11 +44,12 @@ namespace fiQ.Task.Engine
 			{
 
 				// DO STUFF....
-
+				/*
 				using (var smtp = serviceProvider.GetService<SmtpUtilities>())
 				{
 					smtp.SendEmail("Test", "Test body", "dmatthews57@gmail.com");
 				}
+				*/
 			}
 		}
 	}
