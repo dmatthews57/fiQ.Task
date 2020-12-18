@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using fiQ.Task.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -34,7 +35,7 @@ namespace fiQ.Task.Adapters
 			}
 			if (!string.IsNullOrEmpty(taskName))
 			{
-				scope["TaskName"] = taskName;
+				scope["TaskName"] = Path.GetFileName(taskName);
 			}
 			if (scope.Count > 0)
 			{

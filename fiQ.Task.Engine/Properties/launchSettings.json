@@ -2,9 +2,10 @@
   "profiles": {
     "fiQ.Task.Engine": {
       "commandName": "Project",
+      "commandLineArgs": "Smtp:Port=588 -console -debug sendresult=\"result@results.com wtf\" -TaskFile=C:\\TEMP\\test.json -jobname=\"TEST JOB\"",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "DOTNET_ENVIRONMENT": "Development"
+        "DOTNET_ENVIRONMENT": "Staging",
+        "ConnectionStrings:TestDB2": "InvalidConStr"
       }
     }
   }
