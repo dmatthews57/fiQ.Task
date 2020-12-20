@@ -10,8 +10,10 @@ namespace fiQ.Task.Models
 	/// </summary>
 	public class TaskParameters
 	{
-		#region Fields
-		private Dictionary<string, string> parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		#region Fields and constructors
+		private Dictionary<string, string> parameters;
+		public TaskParameters() => parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		public TaskParameters(IReadOnlyDictionary<string, string> parms) => parameters = new Dictionary<string, string>(parms, StringComparer.OrdinalIgnoreCase);
 		#endregion
 
 		#region Properties

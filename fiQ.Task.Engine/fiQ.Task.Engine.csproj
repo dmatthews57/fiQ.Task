@@ -6,6 +6,7 @@
 		<GenerateAssemblyInfo>False</GenerateAssemblyInfo>
 		<Deterministic>false</Deterministic>
 		<UserSecretsId>0c540b8b-5a28-4a08-ad4c-6481c9f8e5b4</UserSecretsId>
+		<AssemblyName>Task.Engine</AssemblyName>
 	</PropertyGroup>
 
 	<ItemGroup>

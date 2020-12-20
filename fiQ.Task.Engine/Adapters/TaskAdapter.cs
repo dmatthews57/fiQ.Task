@@ -21,25 +21,15 @@ namespace fiQ.Task.Adapters
 		protected TaskAdapter(
 			IConfiguration _config,
 			ILogger<TaskAdapter> _logger,
-			string jobName = null,
 			string taskName = null)
 		{
 			config = _config;
 			logger = _logger;
 
-			// If job or task names provided, create logging scope
-			var scope = new Dictionary<string, object>();
-			if (!string.IsNullOrEmpty(jobName))
-			{
-				scope["JobName"] = jobName;
-			}
+			// If task name provided, create logging scope
 			if (!string.IsNullOrEmpty(taskName))
 			{
-				scope["TaskName"] = Path.GetFileName(taskName);
-			}
-			if (scope.Count > 0)
-			{
-				loggerScope = logger.BeginScope(scope);
+				loggerScope = logger.BeginScope(new Dictionary<string, object>() { ["TaskName"] = Path.GetFileName(taskName) });
 			}
 		}
 		#endregion

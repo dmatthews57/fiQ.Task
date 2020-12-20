@@ -22,56 +22,6 @@ namespace fiQ.Task.Utilities
 		private static readonly Regex REGEX_DATE_MACRO_ADJUST = new Regex(@"[[](?<sign>[+-])(?<digits>\d*)(?<unit>[yMdHhms])[]]");
 		#endregion
 
-		#region Adapter loading methods
-		/// <summary>
-		/// Create an instance of the specified TaskExecutor class from the specified DLL and path
-		/// </summary>
-		/// <param name="serviceProvider">Required from Program.Main, for dependency injection</param>
-		/// <param name="adapterClassName">Name of class to instantiate</param>
-		/// <param name="adapterDLLName">Name of DLL in which class is located (optional: if not provided, looks in current assembly)</param>
-		/// <param name="adapterDLLPath">Path to specified DLL (optional: if not provided, looks in current folder)</param>
-		/// <param name="ctorparameters">Constructor arguments to be passed to created object</param>
-		/// <returns></returns>
-		public static TaskAdapter GetTaskAdapter(IServiceProvider serviceProvider,
-			string adapterClassName, string adapterDLLName, string adapterDLLPath,
-			params object[] ctorparameters)
-		{
-			try
-			{
-				// Load Assembly from DLL name (if provided - otherwise look in "this" Assembly):
-				var assembly = string.IsNullOrEmpty(adapterDLLName) ? Assembly.GetExecutingAssembly()
-					: Assembly.LoadFrom(Path.Combine(string.IsNullOrEmpty(adapterDLLPath) ? AppDomain.CurrentDomain.BaseDirectory : adapterDLLPath, adapterDLLName));
-				if (assembly == null)
-				{
-					throw new ArgumentException("Invalid DLL path/name, or assembly not loaded");
-				}
-
-				// Retrieve collection of types from assembly with a base type of TaskAdapter:
-				var assemblyTypes = assembly.GetTypes()?.Where(t => t.IsSubclassOf(typeof(TaskAdapter)));
-				if (assemblyTypes?.Any() ?? throw new ArgumentException("Assembly contains no TaskAdapters"))
-				{
-					// Locate assembly with matching name (short or fully-qualified):
-					foreach (var type in assemblyTypes)
-					{
-						if (type.FullName.Equals(adapterClassName, StringComparison.OrdinalIgnoreCase)
-							|| type.Name.Equals(adapterClassName, StringComparison.OrdinalIgnoreCase))
-						{
-							return (TaskAdapter)ActivatorUtilities.CreateInstance(serviceProvider, type, ctorparameters);
-						}
-					}
-				}
-				throw new ArgumentException("Specified class not found in assembly");
-			}
-			catch (Exception ex)
-			{
-				// Format arguments into exception, to allow client to see what was attempted here
-				throw new Exception(string.Concat("Error initializing adapter ",
-					string.IsNullOrEmpty(adapterDLLName) ? string.Empty : (string.IsNullOrEmpty(adapterDLLPath) ? adapterDLLName : Path.Combine(adapterDLLPath, adapterDLLName)),
-					"::", adapterClassName), ex);
-			}
-		}
-		#endregion
-
 		#region Filename management methods
 		/// <summary>
 		/// Check whether existing filename exists at specified path; if so, generate a
