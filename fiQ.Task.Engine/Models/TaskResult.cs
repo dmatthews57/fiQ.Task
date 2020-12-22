@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace fiQ.Task.Models
 {
 	/// <summary>
-	/// Container class for return data from a TaskAdapter's ExecuteTask function
+	/// Container class for return data from a single TaskAdapter's ExecuteTask function
 	/// </summary>
 	public class TaskResult
 	{

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading.Tasks;
 using fiQ.Task.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -8,7 +9,7 @@ namespace fiQ.Task.Adapters
 	/// <summary>
 	/// TaskAdapter to set parameters for use by subsequent TaskAdapters in batch
 	/// </summary>
-	class SetParmAdapter : TaskAdapter
+	public class SetParmAdapter : TaskAdapter
 	{
 		public SetParmAdapter(IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
@@ -16,7 +17,7 @@ namespace fiQ.Task.Adapters
 		/// <summary>
 		/// Apply all values received in parameters collection to ReturnValue collection
 		/// </summary>
-		public override TaskResult ExecuteTask(TaskParameters parameters)
+		public override async Task<TaskResult> ExecuteTask(ITaskParameters parameters)
 		{
 			var result = new TaskResult();
 			try

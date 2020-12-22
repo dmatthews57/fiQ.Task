@@ -5,8 +5,10 @@ using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using fiQ.Task.Adapters;
 using fiQ.Task.Models;
+using fiQ.Task.Utilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -15,7 +17,7 @@ namespace fiQ.Task.Engine
 	/// <summary>
 	/// Class responsible for creating and executing TaskAdapters based on incoming configuration
 	/// </summary>
-	class TaskEngine : IDisposable
+	public class TaskEngine : IDisposable
 	{
 		#region Fields and constructors
 		private readonly IServiceProvider isp = null;	// For providing dependency injection support to created TaskAdapters
@@ -47,73 +49,162 @@ namespace fiQ.Task.Engine
 		}
 		#endregion
 
-		public int Execute(IOrderedDictionary adapters, bool haltOnError, TaskParameters overrideParameters, out string logMessage)
+		public async Task<TaskSetResult> Execute(List<ITaskParameters> tasks, bool haltOnError)
 		{
-			foreach (DictionaryEntry adapter in adapters)
+			var tasksetresult = new TaskSetResult();
+
+			#region Iterate through all tasks in collection
+			foreach (var task in tasks)
 			{
-				var config = adapter.Value as TaskAdapterConfig;
-				using (var t = GetTaskAdapter(isp, config.AdapterClassName, config.AdapterDLLName, config.AdapterDLLPath, adapter.Key))
+				try
 				{
-					var taskParameters = new TaskParameters(config.TaskParameters);
-					if (overrideParameters?.Parameters?.Count > 0)
+					// Create TaskAdapter instance based on configuration object:
+					using (var t = LoadAdapter(task))
 					{
-						taskParameters.MergeParameters(overrideParameters.Parameters);
+						// Merge return values from previous step(s) into parameter set (overwriting configuration parameters, if required):
+						task.MergeParameters(tasksetresult.ReturnValues);
+
+						#region Execute TaskAdapter and handle result
+						try
+						{
+							var result = await t.ExecuteTask(task);
+							if (result.Success == false || result.Exceptions.Any()) // Execution failed, or succeeded with errors
+							{
+								// Generate logging data for caller:
+								tasksetresult.AppendLogLine($"Task [{task.TaskName}] {(result.Success ? "succeeded with errors" : "execution failed")}");
+								foreach (var ex in result.Exceptions)
+								{
+									tasksetresult.AppendLogLine(ex.ToString());
+								}
+
+								// Update return value, unless it is already set to a higher (i.e. worse) value:
+								if (tasksetresult.ReturnValue < (result.Success ? 7 : 8))
+								{
+									tasksetresult.ReturnValue = (result.Success ? 7 : 8);
+								}
+							}
+							else // Execution succeeded
+							{
+								tasksetresult.AppendLogLine($"Task [{task.TaskName}] executed successfully");
+								if (tasksetresult.ReturnValue < 0)
+								{
+									tasksetresult.ReturnValue = 0;
+								}
+								// Merge any return values output by TaskAdapter into overall set result:
+								tasksetresult.MergeReturnValues(result.ReturnValues);
+							}
+						}
+						catch (AggregateException ae) // Catches asynchronous exceptions only
+						{
+							throw TaskUtilities.SimplifyAggregateException(ae);
+						}
+						#endregion
 					}
-					var result = t.ExecuteTask(taskParameters);
-					overrideParameters.MergeParameters(result.ReturnValues);
+				}
+				catch (LoadAdapterException ex)
+				{
+					// Exception loading adapter object; if value returned is higher (i.e. worse) than current return value, update:
+					if (tasksetresult.ReturnValue < ex.ErrorCode)
+					{
+						tasksetresult.ReturnValue = ex.ErrorCode;
+					}
+					// Add details to logging output:
+					tasksetresult.AppendLogLine($"Task [{task.TaskName}] failed adapter creation: {ex}");
+				}
+				catch (Exception ex)
+				{
+					// General exception (likely during TaskAdapter execution):
+					if (tasksetresult.ReturnValue < 9)
+					{
+						tasksetresult.ReturnValue = 9;
+					}
+					// Add details to logging output:
+					tasksetresult.AppendLogLine($"Task [{task.TaskName}] execution error: {ex}");
+				}
+
+				// If this step was not successful and caller requested halting batch when error encountered, stop now:
+				if (tasksetresult.ReturnValue != 0 && haltOnError)
+				{
+					tasksetresult.AppendLogLine("Halting task list due to error executing previous step");
+					break;
 				}
 			}
-			logMessage = $"Running {adapters.Count} adapters, {(haltOnError ? "halting" : "not halting")} on errors, {overrideParameters.Parameters.Count} override parameters";
-			return 9;
+			#endregion
+
+			return tasksetresult;
 		}
 
 		#region Private methods
 		/// <summary>
-		/// Create an instance of the specified TaskExecutor class from the specified DLL and path
+		/// Create an instance of the specified TaskAdapter class from class name, DLL and path
 		/// </summary>
-		/// <param name="serviceProvider">Required from Program.Main, for dependency injection</param>
-		/// <param name="adapterClassName">Name of class to instantiate</param>
-		/// <param name="adapterDLLName">Name of DLL in which class is located (optional: if not provided, looks in current assembly)</param>
-		/// <param name="adapterDLLPath">Path to specified DLL (optional: if not provided, looks in current folder)</param>
-		/// <param name="ctorparameters">Constructor arguments to be passed to created object</param>
-		/// <returns></returns>
-		private static TaskAdapter GetTaskAdapter(IServiceProvider serviceProvider,
-			string adapterClassName, string adapterDLLName, string adapterDLLPath,
-			params object[] ctorparameters)
+		/// <param name="task">Configuration object for requested TaskAdapter</param>
+		private TaskAdapter LoadAdapter(ITaskParameters task)
 		{
+			// Ensure caller has provided name of class to load:
+			if (string.IsNullOrEmpty(task.AdapterClassName))
+			{
+				throw new LoadAdapterException(10, "TaskAdapter class name not provided");
+			}
+
 			try
 			{
 				// Load Assembly from DLL name (if provided - otherwise look in "this" Assembly):
-				var assembly = string.IsNullOrEmpty(adapterDLLName) ? Assembly.GetExecutingAssembly()
-					: Assembly.LoadFrom(Path.Combine(string.IsNullOrEmpty(adapterDLLPath) ? AppDomain.CurrentDomain.BaseDirectory : adapterDLLPath, adapterDLLName));
+				var assembly = string.IsNullOrEmpty(task.AdapterDLLName) ? Assembly.GetExecutingAssembly()
+					: Assembly.LoadFrom(Path.Combine(string.IsNullOrEmpty(task.AdapterDLLPath) ? AppDomain.CurrentDomain.BaseDirectory : task.AdapterDLLPath, task.AdapterDLLName));
 				if (assembly == null)
 				{
-					throw new ArgumentException("Invalid DLL path/name, or assembly not loaded");
+					throw BuildLoadAdapterException(11, new ArgumentException("Invalid DLL path/name, or assembly not loaded"), task);
 				}
 
 				// Retrieve collection of types from assembly with a base type of TaskAdapter:
 				var assemblyTypes = assembly.GetTypes()?.Where(t => t.IsSubclassOf(typeof(TaskAdapter)));
-				if (assemblyTypes?.Any() ?? throw new ArgumentException("Assembly contains no TaskAdapters"))
+				if (assemblyTypes?.Any() ?? throw BuildLoadAdapterException(12, new ArgumentException("Assembly contains no TaskAdapters"), task))
 				{
 					// Locate assembly with matching name (short or fully-qualified):
 					foreach (var type in assemblyTypes)
 					{
-						if (type.FullName.Equals(adapterClassName, StringComparison.OrdinalIgnoreCase)
-							|| type.Name.Equals(adapterClassName, StringComparison.OrdinalIgnoreCase))
+						if (type.FullName.Equals(task.AdapterClassName, StringComparison.OrdinalIgnoreCase)
+							|| type.Name.Equals(task.AdapterClassName, StringComparison.OrdinalIgnoreCase))
 						{
-							return (TaskAdapter)ActivatorUtilities.CreateInstance(serviceProvider, type, ctorparameters);
+							// Create TaskAdapter instance (ActivatorUtilities will handle dependency injection, so long as TaskName
+							// (TaskAdapter constructor argument) is not null (which would confuse activator):
+							return (TaskAdapter)ActivatorUtilities.CreateInstance(isp, type, task.TaskName ?? string.Empty);
 						}
 					}
 				}
-				throw new ArgumentException("Specified class not found in assembly");
+
+				// If this point is reached, class was not found:
+				throw BuildLoadAdapterException(13, new ArgumentException("Specified class not found in assembly"), task);
 			}
 			catch (Exception ex)
 			{
-				// Format arguments into exception, to allow client to see what was attempted here
-				throw new Exception(string.Concat("Error initializing adapter ",
-					string.IsNullOrEmpty(adapterDLLName) ? string.Empty : (string.IsNullOrEmpty(adapterDLLPath) ? adapterDLLName : Path.Combine(adapterDLLPath, adapterDLLName)),
-					"::", adapterClassName), ex);
+				throw BuildLoadAdapterException(14, ex, task);
 			}
+		}
+
+		/// <summary>
+		/// Construct a LoadAdapterException with provided return value and nested exception
+		/// </summary>
+		private LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, ITaskParameters task)
+		{
+			return new LoadAdapterException(
+				errorCode,
+				// Format outer exception error string combining arguments to allow client to see what was attempted:
+				string.Concat("Error initializing adapter ",
+					string.IsNullOrEmpty(task.AdapterDLLName) ? string.Empty : (string.IsNullOrEmpty(task.AdapterDLLPath) ? task.AdapterDLLName : Path.Combine(task.AdapterDLLPath, task.AdapterDLLName)),
+					"::",
+					task.AdapterClassName),
+				ex);
+		}
+		#endregion
+
+		#region Private class definitions
+		private class LoadAdapterException : Exception
+		{
+			public int ErrorCode { get; init; }
+			public LoadAdapterException(int errorCode, string message) : base(message) => ErrorCode = errorCode;
+			public LoadAdapterException(int errorCode, string message, Exception inner) : base(message, inner) => ErrorCode = errorCode;
 		}
 		#endregion
 	}

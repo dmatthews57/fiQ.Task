@@ -5,13 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using fiQ.Task.Engine;
 using fiQ.Task.Models;
 using fiQ.Task.Utilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 
-namespace fiQ.Task.Engine
+namespace fiQ.Task.Cmd
 {
 	class Program
 	{
@@ -25,7 +26,7 @@ namespace fiQ.Task.Engine
 			string taskFileName = null; // For running a single file
 			string taskFolderName = null; // For running all files in a folder
 			bool haltOnError = false; // Flag to stop running batch if error encountered
-			var overrideTaskParameters = new TaskParameters(); // Global overrides for task parameters
+			var overrideTaskParameters = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); // Global overrides for task parameters
 
 			#region Load application configuration
 			var env = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
@@ -61,7 +62,7 @@ namespace fiQ.Task.Engine
 					var match = REGEX_TASKPARM.Match(arg);
 					if (match.Success)
 					{
-						overrideTaskParameters.AddParameter(match.Groups["name"].Value, match.Groups["value"].Value);
+						overrideTaskParameters[match.Groups["name"].Value]  = match.Groups["value"].Value;
 					}
 					else
 					{
@@ -74,9 +75,9 @@ namespace fiQ.Task.Engine
 							switch (match.Groups["value"].Value.ToLowerInvariant())
 							{
 								case "console": // Enable console logging
-												// Add console sink to Serilog config (added at node "99" to prevent overwriting
-												// any existing sinks; note that if a console sink is already configured, this
-												// will result in messages being output to console twice)
+									// Add console sink to Serilog config (added at node "99" to prevent overwriting
+									// any existing sinks; note that if a console sink is already configured, this
+									// will result in messages being output to console twice)
 									configargs.Add("Serilog:WriteTo:99:Name=Console");
 									break;
 								case "debug": // Set minimum logging level to Debug
@@ -115,8 +116,8 @@ namespace fiQ.Task.Engine
 										}
 										break;
 									default: // Unrecognized parameter - add to config collection
-											 // (replace single leading "-" with "--", as MS config provider will
-											 // hysterically throw a formatting exception for unmapped "short keys")
+										// (replace single leading "-" with "--", as MS config provider will
+										// hysterically throw a formatting exception for unmapped "short keys")
 										configargs.Add(REGEX_NAMEDPARM_SHORTKEY.Replace(arg, "--"));
 										break;
 								};

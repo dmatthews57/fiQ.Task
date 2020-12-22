@@ -6,12 +6,18 @@ using fiQ.Task.Utilities;
 namespace fiQ.Task.Models
 {
 	/// <summary>
-	/// Container class for parameters to be passed as input to a TaskAdapter's ExecuteTask function
+	/// Container class for configuration of a specific TaskAdapter to be executed
 	/// </summary>
 	public class TaskParameters
 	{
 		#region Fields and constructors
+		public string TaskName { get; set; }
+		public string AdapterClassName { get; set; }
+		public string AdapterDLLName { get; set; } = null;
+		public string AdapterDLLPath { get; set; } = null;
+
 		private Dictionary<string, string> parameters;
+
 		public TaskParameters() => parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		public TaskParameters(IReadOnlyDictionary<string, string> parms) => parameters = new Dictionary<string, string>(parms, StringComparer.OrdinalIgnoreCase);
 		#endregion

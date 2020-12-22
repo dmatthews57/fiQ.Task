@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using fiQ.Task.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -47,6 +48,11 @@ namespace fiQ.Task.Adapters
 		}
 		#endregion
 
-		public abstract TaskResult ExecuteTask(TaskParameters parameters);
+		/// <summary>
+		/// Definition of abstract async execution function for this task adapter
+		/// </summary>
+		/// <param name="parameters">Configuration object for this task</param>
+		/// <returns>Task wrapping a TaskResult object</returns>
+		public abstract Task<TaskResult> ExecuteTask(ITaskParameters parameters);
 	}
 }

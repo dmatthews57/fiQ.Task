@@ -1,14 +1,11 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Text.RegularExpressions;
-using fiQ.Task.Adapters;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace fiQ.Task.Utilities
 {
-	public class TaskUtilities
+	public static class TaskUtilities
 	{
 		#region Public fields
 		public static readonly Regex REGEX_DATE_MACRO = new Regex(@"<U?(yy|MM|dd|HH|hh|H|h|mm|ss)+([[][+-]\d*[yMdHhms][]])*>");
@@ -20,6 +17,35 @@ namespace fiQ.Task.Utilities
 		#region Private fields
 		private static readonly Regex REGEX_DATE_MACRO_FORMAT = new Regex("(yy|MM|dd|HH|hh|H|h|mm|ss)+");
 		private static readonly Regex REGEX_DATE_MACRO_ADJUST = new Regex(@"[[](?<sign>[+-])(?<digits>\d*)(?<unit>[yMdHhms])[]]");
+		#endregion
+
+		#region Exception management methods
+		/// <summary>
+		/// Simplify asynchronous exceptions (async function calls throw AggregateException even if
+		/// only one exception actually occurred; extract single Exception object in this case)
+		/// </summary>
+		public static Exception SimplifyAggregateException(AggregateException ae)
+		{
+			Exception AggregateEx = null, SingleEx = null;
+
+			// AggregateException's handler function will execute for each exception in collection;
+			// if there is only one exception here, AggregateEx will stay null:
+			ae.Handle(ex =>
+			{
+				if (SingleEx == null)
+				{
+					SingleEx = ex;
+				}
+				else
+				{
+					AggregateEx = ae;
+				}
+				return true;
+			});
+
+			// If AggregateEx is not null there are multiple exceptions, otherwise there is only one:
+			return AggregateEx ?? SingleEx;
+		}
 		#endregion
 
 		#region Filename management methods

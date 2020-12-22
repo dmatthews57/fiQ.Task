@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "fiQ.Task.Cmd": {
+      "commandName": "Project",
+      "commandLineArgs": "Smtp:Port=588 -TaskFolder=C:\\TEMP -jobname=\"TEST JOB\" -senderror=error@error.com",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development",
+        "ConnectionStrings:TestDB2": "InvalidConStr"
+      }
+    }
+  }
+}
