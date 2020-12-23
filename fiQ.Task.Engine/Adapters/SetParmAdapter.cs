@@ -17,7 +17,7 @@ namespace fiQ.Task.Adapters
 		/// <summary>
 		/// Apply all values received in parameters collection to ReturnValue collection
 		/// </summary>
-		public override async Task<TaskResult> ExecuteTask(ITaskParameters parameters)
+		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
 			var result = new TaskResult();
 			try

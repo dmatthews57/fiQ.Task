@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using fiQ.Task.Engine;
 using fiQ.Task.Models;
@@ -16,17 +14,13 @@ namespace fiQ.Task.Cmd
 {
 	class Program
 	{
-		#region Fields
-		private static IConfiguration config = null;
-		#endregion
-
 		static void Main(string[] args)
 		{
 			string jobName = null; // For logging purposes
 			string taskFileName = null; // For running a single file
 			string taskFolderName = null; // For running all files in a folder
 			bool haltOnError = false; // Flag to stop running batch if error encountered
-			var overrideTaskParameters = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); // Global overrides for task parameters
+			var cmdlineTaskParameters = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); // Global overrides for task parameters
 
 			#region Load application configuration
 			var env = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
@@ -62,7 +56,7 @@ namespace fiQ.Task.Cmd
 					var match = REGEX_TASKPARM.Match(arg);
 					if (match.Success)
 					{
-						overrideTaskParameters[match.Groups["name"].Value]  = match.Groups["value"].Value;
+						cmdlineTaskParameters[$"Parameters:{match.Groups["name"].Value}"]  = match.Groups["value"].Value;
 					}
 					else
 					{
@@ -137,7 +131,7 @@ namespace fiQ.Task.Cmd
 				}
 				#endregion
 			}
-			config = configbuilder.Build();
+			IConfiguration config = configbuilder.Build();
 			#endregion
 
 			// Build logger configuration from application config file and create logger:
@@ -156,8 +150,9 @@ namespace fiQ.Task.Cmd
 
 			using (var serviceProvider = serviceCollection.BuildServiceProvider())
 			{
-				#region Create collection of TaskAdapter configurations based on incoming parameters
-				var adapterConfigs = new OrderedDictionary();
+				var adapterConfigs = new List<TaskParameters>();
+
+				#region Create collection of adapter configurations from incoming parameters
 				try
 				{
 					IOrderedEnumerable<string> configFiles = null;
@@ -177,34 +172,20 @@ namespace fiQ.Task.Cmd
 					}
 					// (else leave configFiles null, and fall through to error logic below)
 
-					#region Iterate through all files, deserializing TaskAdapterConfig objects
+					#region Iterate through all files, constructing parameter objects
 					if (configFiles != null)
 					{
 						foreach (var configFile in configFiles)
 						{
-							try
-							{
-								using (var fileStream = new FileStream(configFile, FileMode.Open, FileAccess.Read, FileShare.None))
-								using (var streamReader = new StreamReader(fileStream))
-								{
-									var cfg = JsonSerializer.Deserialize<TaskAdapterConfig>(streamReader.ReadToEnd());
-									adapterConfigs.Add(configFile, cfg.Valid ? cfg : throw new Exception("TaskAdapter configuration not valid"));
-								}
-							}
-							catch (Exception ex)
-							{
-								// Error reading file or deserializing configuration object; if this is not part of a batch OR
-								// batch specifies halt on error, empty list and re-throw exception to stop all processing:
-								if (string.IsNullOrEmpty(taskFolderName) || haltOnError)
-								{
-									adapterConfigs.Clear();
-									throw new Exception($"Error reading configuration file {configFile}", ex);
-								}
-								else // Otherwise just log error and proceed with other configurations:
-								{
-									Log.Logger.Warning(ex, $"Error reading configuration file {configFile}, skipped");
-								}
-							}
+							// Build task configuration object from Json file (combined with override parameters
+							// from command line), bind to TaskParameter class and add to list:
+							adapterConfigs.Add(
+								new ConfigurationBuilder()
+									.AddJsonFile(configFile, optional: false, reloadOnChange: false)
+									.AddInMemoryCollection(cmdlineTaskParameters)
+									.Build()
+									.Get<TaskParameters>(bo => bo.BindNonPublicProperties = true)
+							);
 						}
 					}
 					#endregion
@@ -219,9 +200,13 @@ namespace fiQ.Task.Cmd
 				string logMessage = null;
 				if (adapterConfigs.Count > 0)
 				{
-					// Activate TaskEngine service, and pass in TaskAdapter configuration collection for execution:
+					// Activate TaskEngine service, and pass in TaskAdapter configuration collection for (synchronous) execution:
 					using var te = serviceProvider.GetRequiredService<TaskEngine>();
-					Environment.ExitCode = te.Execute(adapterConfigs, haltOnError, overrideTaskParameters, out logMessage);
+					var result = te.Execute(adapterConfigs, haltOnError).Result;
+
+					// Set executable exit code to execution return value, save log message for use below:
+					Environment.ExitCode = result.ReturnValue;
+					logMessage = result.LogMessage;
 				}
 				else // No configurations available - exit with error message
 				{
@@ -231,18 +216,22 @@ namespace fiQ.Task.Cmd
 				#endregion
 
 				#region Notify users of execution results, if required
-				Console.Error.WriteLine(logMessage);
+				if (!string.IsNullOrEmpty(logMessage))
+				{
+					Console.Error.WriteLine(logMessage);
+				}
 
 				// If configuration specifies that results should be emailed (or it specifies that errors should be
 				// emailed and application is NOT exiting with success), send alert now:
-				var sendemail = (string.IsNullOrEmpty(config["sendresult"]) && Environment.ExitCode != 0) ?
+				var sendresultsto = (string.IsNullOrEmpty(config["sendresult"]) && Environment.ExitCode != 0) ?
 					config["senderror"] : config["sendresult"];
-				if (!string.IsNullOrEmpty(sendemail))
+				if (!string.IsNullOrEmpty(sendresultsto))
 				{
 					using (var smtp = serviceProvider.GetService<SmtpUtilities>())
 					{
-						Console.WriteLine($"Sending {Environment.ExitCode} to {sendemail}");
-						//smtp.SendEmail("Test", "Test body", sendemail);
+						smtp.SendEmail($"Execution {(Environment.ExitCode == 0 ? "results" : "ERROR")} job [{jobName}] on {Environment.MachineName}",
+							$"Return code {Environment.ExitCode} at {DateTime.Now:yyyy-MM-dd HH:mm:ss}<br/><br/><pre>{logMessage}</pre>",
+							sendresultsto);
 					}
 				}
 				#endregion

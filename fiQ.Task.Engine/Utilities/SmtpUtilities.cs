@@ -59,6 +59,9 @@ namespace fiQ.Task.Utilities
 		public bool SendEmail(string messageSubject, string messageBody, string messageTo = null, string messageFrom = null,
 			Stream attachment = null, string attachmentName = null)
 		{
+			Console.WriteLine($"Sending to {messageTo}:\n{messageSubject}\n{messageBody}");
+
+			/*
 			try
 			{
 				if (smtpClient == null) throw new InvalidOperationException("Client not initialized (configuration may be missing)");
@@ -83,6 +86,7 @@ namespace fiQ.Task.Utilities
 			{
 				logger.LogError(ex, "SMTP send failed");
 			}
+			*/
 			return false;
 		}
 		#endregion

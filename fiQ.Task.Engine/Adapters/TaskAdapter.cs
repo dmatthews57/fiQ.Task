@@ -53,6 +53,6 @@ namespace fiQ.Task.Adapters
 		/// </summary>
 		/// <param name="parameters">Configuration object for this task</param>
 		/// <returns>Task wrapping a TaskResult object</returns>
-		public abstract Task<TaskResult> ExecuteTask(ITaskParameters parameters);
+		public abstract Task<TaskResult> ExecuteTask(TaskParameters parameters);
 	}
 }

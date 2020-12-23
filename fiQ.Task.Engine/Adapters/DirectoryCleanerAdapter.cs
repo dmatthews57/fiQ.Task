@@ -10,7 +10,7 @@ namespace fiQ.Task.Adapters
 		public DirectoryCleanerAdapter(IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
 
-		public override async Task<TaskResult> ExecuteTask(ITaskParameters parameters)
+		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
 			//logger.LogWarning("Warning {connstr}", config.GetConnectionString("TESTDB"));
 			//logger.LogDebug("Debug {connstr}", config.GetConnectionString("TESTDB2"));

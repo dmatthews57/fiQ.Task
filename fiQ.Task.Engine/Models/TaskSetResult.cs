@@ -5,8 +5,8 @@ using System.Text;
 namespace fiQ.Task.Models
 {
 	/// <summary>
-	/// Container class for return data from TaskEngine's Execute function (representing one or more
-	/// executions of TaskAdapter::ExecuteTask functions)
+	/// Container class for return data from TaskEngine's Execute function (representing execution of
+	/// one or more TaskAdapter::ExecuteTask functions)
 	/// </summary>
 	public class TaskSetResult
 	{

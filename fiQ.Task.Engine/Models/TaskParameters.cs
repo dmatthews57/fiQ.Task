@@ -6,38 +6,19 @@ using fiQ.Task.Utilities;
 namespace fiQ.Task.Models
 {
 	/// <summary>
-	/// Container class for configuration of a specific TaskAdapter to be executed
+	/// Container class for configuring a specific TaskAdapter and set of execution parameters
 	/// </summary>
 	public class TaskParameters
 	{
-		#region Fields and constructors
-		public string TaskName { get; set; }
-		public string AdapterClassName { get; set; }
-		public string AdapterDLLName { get; set; } = null;
-		public string AdapterDLLPath { get; set; } = null;
-
-		private Dictionary<string, string> parameters;
-
-		public TaskParameters() => parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		public TaskParameters(IReadOnlyDictionary<string, string> parms) => parameters = new Dictionary<string, string>(parms, StringComparer.OrdinalIgnoreCase);
-		#endregion
-
-		#region Properties
-		public IReadOnlyDictionary<string, string> Parameters
-		{
-			get { return parameters; }
-		}
+		#region Fields
+		public string TaskName { get; init; }
+		public string AdapterClassName { get; init; }
+		public string AdapterDLLName { get; init; }
+		public string AdapterDLLPath { get; init; }
+		private Dictionary<string, string> parameters { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		#endregion
 
 		#region Public methods - configuration accessors
-		/// <summary>
-		///  Retrieve count of parameters in configuration collection
-		/// </summary>
-		public int Count()
-		{
-			return parameters.Count;
-		}
-
 		/// <summary>
 		/// Retrieve collection of dictionary keys (to allow independent iteration through parameters)
 		/// </summary>

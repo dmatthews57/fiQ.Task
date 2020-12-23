@@ -49,7 +49,7 @@ namespace fiQ.Task.Engine
 		}
 		#endregion
 
-		public async Task<TaskSetResult> Execute(List<ITaskParameters> tasks, bool haltOnError)
+		public async Task<TaskSetResult> Execute(List<TaskParameters> tasks, bool haltOnError)
 		{
 			var tasksetresult = new TaskSetResult();
 
@@ -139,7 +139,7 @@ namespace fiQ.Task.Engine
 		/// Create an instance of the specified TaskAdapter class from class name, DLL and path
 		/// </summary>
 		/// <param name="task">Configuration object for requested TaskAdapter</param>
-		private TaskAdapter LoadAdapter(ITaskParameters task)
+		private TaskAdapter LoadAdapter(TaskParameters task)
 		{
 			// Ensure caller has provided name of class to load:
 			if (string.IsNullOrEmpty(task.AdapterClassName))
@@ -186,7 +186,7 @@ namespace fiQ.Task.Engine
 		/// <summary>
 		/// Construct a LoadAdapterException with provided return value and nested exception
 		/// </summary>
-		private LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, ITaskParameters task)
+		private LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, TaskParameters task)
 		{
 			return new LoadAdapterException(
 				errorCode,
