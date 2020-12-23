@@ -30,7 +30,7 @@ namespace fiQ.Task.Adapters
 			// If task name provided, create logging scope
 			if (!string.IsNullOrEmpty(taskName))
 			{
-				loggerScope = logger.BeginScope(new Dictionary<string, object>() { ["TaskName"] = Path.GetFileName(taskName) });
+				loggerScope = logger.BeginScope(new Dictionary<string, object>() { ["TaskName"] = taskName });
 			}
 		}
 		#endregion

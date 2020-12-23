@@ -71,10 +71,10 @@ namespace fiQ.Task.Engine
 							if (result.Success == false || result.Exceptions.Any()) // Execution failed, or succeeded with errors
 							{
 								// Generate logging data for caller:
-								tasksetresult.AppendLogLine($"Task [{task.TaskName}] {(result.Success ? "succeeded with errors" : "execution failed")}");
+								tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] {(result.Success ? "succeeded with errors" : "execution failed")}");
 								foreach (var ex in result.Exceptions)
 								{
-									tasksetresult.AppendLogLine(ex.ToString());
+									tasksetresult.LogMessage.AppendLine(ex.ToString());
 								}
 
 								// Update return value, unless it is already set to a higher (i.e. worse) value:
@@ -85,7 +85,7 @@ namespace fiQ.Task.Engine
 							}
 							else // Execution succeeded
 							{
-								tasksetresult.AppendLogLine($"Task [{task.TaskName}] executed successfully");
+								tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] executed successfully");
 								if (tasksetresult.ReturnValue < 0)
 								{
 									tasksetresult.ReturnValue = 0;
@@ -109,7 +109,7 @@ namespace fiQ.Task.Engine
 						tasksetresult.ReturnValue = ex.ErrorCode;
 					}
 					// Add details to logging output:
-					tasksetresult.AppendLogLine($"Task [{task.TaskName}] failed adapter creation: {ex}");
+					tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] failed adapter creation: {ex}");
 				}
 				catch (Exception ex)
 				{
@@ -119,13 +119,13 @@ namespace fiQ.Task.Engine
 						tasksetresult.ReturnValue = 9;
 					}
 					// Add details to logging output:
-					tasksetresult.AppendLogLine($"Task [{task.TaskName}] execution error: {ex}");
+					tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] execution error: {ex}");
 				}
 
 				// If this step was not successful and caller requested halting batch when error encountered, stop now:
 				if (tasksetresult.ReturnValue != 0 && haltOnError)
 				{
-					tasksetresult.AppendLogLine("Halting task list due to error executing previous step");
+					tasksetresult.LogMessage.AppendLine("Halting task list due to error executing previous step");
 					break;
 				}
 			}
@@ -176,6 +176,10 @@ namespace fiQ.Task.Engine
 
 				// If this point is reached, class was not found:
 				throw BuildLoadAdapterException(13, new ArgumentException("Specified class not found in assembly"), task);
+			}
+			catch (LoadAdapterException)
+			{
+				throw;
 			}
 			catch (Exception ex)
 			{

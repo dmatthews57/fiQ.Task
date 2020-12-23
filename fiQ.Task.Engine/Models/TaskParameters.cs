@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using fiQ.Task.Utilities;
+using Microsoft.Extensions.Configuration;
 
 namespace fiQ.Task.Models
 {
@@ -10,12 +11,30 @@ namespace fiQ.Task.Models
 	/// </summary>
 	public class TaskParameters
 	{
-		#region Fields
+		#region Fields and constructors
 		public string TaskName { get; init; }
 		public string AdapterClassName { get; init; }
 		public string AdapterDLLName { get; init; }
 		public string AdapterDLLPath { get; init; }
-		private Dictionary<string, string> parameters { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		/// <summary>
+		/// Optional configuration object containing extended configuration data
+		/// </summary>
+		/// <remarks>
+		/// Allows TaskAdapter child classes access to strongly-typed custom configuration objects
+		/// </remarks>
+		public IConfiguration Configuration { get; init; } = null;
+		/// <summary>
+		/// Private name:value parameter collection (accessed via public methods only)
+		/// </summary>
+		private Dictionary<string, string> parameters { get; init; }
+		public TaskParameters()
+		{
+			parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		}
+		public TaskParameters(IReadOnlyDictionary<string, string> _parameters)
+		{
+			parameters = new Dictionary<string, string>(_parameters, StringComparer.OrdinalIgnoreCase);
+		}
 		#endregion
 
 		#region Public methods - configuration accessors

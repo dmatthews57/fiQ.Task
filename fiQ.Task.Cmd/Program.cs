@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using fiQ.Task.Engine;
 using fiQ.Task.Models;
@@ -131,7 +132,7 @@ namespace fiQ.Task.Cmd
 				}
 				#endregion
 			}
-			IConfiguration config = configbuilder.Build();
+			var config = configbuilder.Build();
 			#endregion
 
 			// Build logger configuration from application config file and create logger:
@@ -142,7 +143,7 @@ namespace fiQ.Task.Cmd
 			// Set up services and configurations for dependency injection:
 			var serviceCollection = new ServiceCollection()
 				.AddLogging(configure => configure.AddSerilog())
-				.AddSingleton(config)
+				.AddSingleton<IConfiguration>(config)
 				.Configure<SmtpOptions>(config.GetSection("Smtp"))
 				.AddTransient<SmtpUtilities>()
 				.AddSingleton(x => ActivatorUtilities.CreateInstance<TaskEngine>(x, jobName))
@@ -151,6 +152,7 @@ namespace fiQ.Task.Cmd
 			using (var serviceProvider = serviceCollection.BuildServiceProvider())
 			{
 				var adapterConfigs = new List<TaskParameters>();
+				var logMessage = new StringBuilder();
 
 				#region Create collection of adapter configurations from incoming parameters
 				try
@@ -177,15 +179,41 @@ namespace fiQ.Task.Cmd
 					{
 						foreach (var configFile in configFiles)
 						{
-							// Build task configuration object from Json file (combined with override parameters
-							// from command line), bind to TaskParameter class and add to list:
-							adapterConfigs.Add(
-								new ConfigurationBuilder()
-									.AddJsonFile(configFile, optional: false, reloadOnChange: false)
-									.AddInMemoryCollection(cmdlineTaskParameters)
-									.Build()
-									.Get<TaskParameters>(bo => bo.BindNonPublicProperties = true)
-							);
+							try
+							{
+								// Build configuration object from Json file (combined with override parameters
+								// from command line), bind to a TaskParameterTemplate object:
+								var taskconfig = new ConfigurationBuilder()
+										.AddJsonFile(configFile, optional: false, reloadOnChange: false)
+										.AddInMemoryCollection(cmdlineTaskParameters)
+										.Build();
+								var taskparms = taskconfig.Get<TaskParametersTemplate>().EnsureValid();
+
+								// Create TaskParameters object from template object, and add to collection:
+								adapterConfigs.Add(new TaskParameters(taskparms.Parameters)
+								{
+									TaskName = string.IsNullOrEmpty(taskparms.TaskName) ? Path.GetFileName(configFile) : taskparms.TaskName,
+									AdapterClassName = taskparms.AdapterClassName,
+									AdapterDLLName = taskparms.AdapterDLLName,
+									AdapterDLLPath = taskparms.AdapterDLLPath,
+									Configuration = taskconfig
+								});
+							}
+							catch (Exception ex)
+							{
+								// Error reading file or deserializing configuration object; if this is not part of a batch OR
+								// batch specifies halt on error, empty list and re-throw exception to stop all processing:
+								if (string.IsNullOrEmpty(taskFolderName) || haltOnError)
+								{
+									adapterConfigs.Clear();
+									throw new Exception($"Error reading configuration file {configFile}", ex);
+								}
+								else // Otherwise just log error and proceed with other configurations:
+								{
+									Log.Logger.Warning(ex, $"Error reading configuration file {configFile}, skipped");
+									logMessage.AppendLine($"Error reading configuration file {configFile}, skipped");
+								}
+							}
 						}
 					}
 					#endregion
@@ -197,7 +225,6 @@ namespace fiQ.Task.Cmd
 				#endregion
 
 				#region Execute TaskAdapter collection
-				string logMessage = null;
 				if (adapterConfigs.Count > 0)
 				{
 					// Activate TaskEngine service, and pass in TaskAdapter configuration collection for (synchronous) execution:
@@ -206,17 +233,17 @@ namespace fiQ.Task.Cmd
 
 					// Set executable exit code to execution return value, save log message for use below:
 					Environment.ExitCode = result.ReturnValue;
-					logMessage = result.LogMessage;
+					logMessage.Append(result.LogMessage);
 				}
 				else // No configurations available - exit with error message
 				{
 					Environment.ExitCode = 1;
-					logMessage = "No task configurations available";
+					logMessage.Append("No task configurations available");
 				}
 				#endregion
 
 				#region Notify users of execution results, if required
-				if (!string.IsNullOrEmpty(logMessage))
+				if (logMessage.Length > 0)
 				{
 					Console.Error.WriteLine(logMessage);
 				}
