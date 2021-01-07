@@ -9,7 +9,7 @@ namespace fiQ.Task.Utilities
 	{
 		#region Public fields
 		public static readonly Regex REGEX_DATE_MACRO = new Regex(@"<U?(yy|MM|dd|HH|hh|H|h|mm|ss)+([[][+-]\d*[yMdHhms][]])*>");
-		public static readonly Regex REGEX_DIRPATH = new Regex(@"^(?:[a-zA-Z]\:|[\\/]{2}[\w\-.]+[\\/][\w\-. ]+\$?)(?:[\\/][\w\-. ]+)*[\\/]?$");
+		public static readonly Regex REGEX_DIRPATH = new Regex(@"^(?:[a-zA-Z]\:|[\\/]{2}[\w\-.]+[\\/][\w\-. ]+\$?)(?:[\\/][\w\-. <>]+)*[\\/]?$");
 		public static readonly Regex REGEX_EMAIL = new Regex(@"^([A-Za-z0-9]((\.(?!\.))|[A-Za-z0-9_+-])*)(?<=[A-Za-z0-9_-])@([A-Za-z0-9][A-Za-z0-9-]*(?<=[A-Za-z0-9])\.)+[A-Za-z0-9][A-Za-z0-9-]{0,22}(?<=[A-Za-z0-9])$");
 		public static readonly Regex REGEX_GUID = new Regex(@"^(\{)?[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}(\})?$");
 		#endregion
@@ -86,20 +86,23 @@ namespace fiQ.Task.Utilities
 		/// <summary>
 		/// Dynamically replace all instances of date/time macro strings (complying with REGEX_DATE_MACRO: some combination of
 		/// year/month/day/hour/minute/second placeholders contained in "<>" brackets and optionally adjusted by a value in
-		/// "[]" brackets) with the current date/time (adjusted as appropriate), formatting as specified by macro
+		/// "[]" brackets) with the specified date/time (adjusted as appropriate), formatting as specified by macro
 		/// </summary>
-		public static string ApplyDateMacros(string macro)
+		public static string ApplyDateMacros(string macro, DateTime applyDateTime)
 		{
 			// Input string may contain multiple macro instances; pull all distinct matches from string for processing (any
 			// repeated macro only needs to be processed once, as all instances in the original string will be replaced):
-			var matches = REGEX_DATE_MACRO.Matches(macro).OfType<Match>().Select(m => m.Value).Distinct();
+			var matches = REGEX_DATE_MACRO.Matches(macro)
+				.OfType<Match>()
+				.Select(m => m.Value)
+				.Distinct();
 			foreach (var match in matches)
 			{
-				// Use UTC time only if macro string starts with a "U", otherwise use local time:
-				var datetime = match.Substring(1, 1) == "U" ? DateTime.UtcNow : DateTime.Now;
+				// If macro string starts with a "U", convert time to UTC:
+				var dt = match[0] == 'U' ? applyDateTime.ToUniversalTime() : applyDateTime;
 
 				#region Apply date adjustments
-				// Locate optional trailing add/remove time values contained in "[]" (for example, "[-2M][-d]" would deduct
+				// Locate optional trailing time adjustment values contained in "[]" (for example, "[-2M][-d]" would deduct
 				// two months and one day from current time), and apply adjustments to DateTime value
 				var adjustments = REGEX_DATE_MACRO_ADJUST.Matches(match).OfType<Match>();
 				foreach (var adjust in adjustments)
@@ -119,23 +122,23 @@ namespace fiQ.Task.Utilities
 					switch (adjust.Groups["unit"].Value)
 					{
 						case "y":
-							datetime = datetime.AddYears(numAdj);
+							dt = dt.AddYears(numAdj);
 							break;
 						case "M":
-							datetime = datetime.AddMonths(numAdj);
+							dt = dt.AddMonths(numAdj);
 							break;
 						case "d":
-							datetime = datetime.AddDays(numAdj);
+							dt = dt.AddDays(numAdj);
 							break;
 						case "H":
 						case "h":
-							datetime = datetime.AddHours(numAdj);
+							dt = dt.AddHours(numAdj);
 							break;
 						case "m":
-							datetime = datetime.AddMinutes(numAdj);
+							dt = dt.AddMinutes(numAdj);
 							break;
 						case "s":
-							datetime = datetime.AddSeconds(numAdj);
+							dt = dt.AddSeconds(numAdj);
 							break;
 					};
 				}
@@ -146,7 +149,7 @@ namespace fiQ.Task.Utilities
 
 				// Replace all instances of the matched macro string with formatted date/time string (note that single-character
 				// format strings "H" and "h" are allowed by regex, these must be passed to ToString as "%H" or "%h"):
-				macro = macro.Replace(match, datetime.ToString(customFormat switch { "H" => "%H", "h" => "%h", _ => customFormat }));
+				macro = macro.Replace(match, dt.ToString(customFormat switch { "H" => "%H", "h" => "%h", _ => customFormat }));
 			}
 
 			// Any macros present in string have now been replaced, return result

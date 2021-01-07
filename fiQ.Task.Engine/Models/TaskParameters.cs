@@ -53,11 +53,11 @@ namespace fiQ.Task.Models
 		/// <param name="parmRegex">Optional Regex object to apply to parameter</param>
 		/// <param name="processDateMacros">If set to true, date macros in value will be applied</param>
 		/// <returns>Null if value does not match Regex, otherwise value (string.Empty if not found)</returns>
-		public string GetString(string name, Regex parmRegex = null, bool processDateMacros = false)
+		public string GetString(string name, Regex parmRegex = null, DateTime? applyMacroTime = null)
 		{
 			if (parameters.ContainsKey(name))
 			{
-				string value = processDateMacros ? TaskUtilities.ApplyDateMacros(parameters[name]) : parameters[name];
+				string value = applyMacroTime == null ? parameters[name] : TaskUtilities.ApplyDateMacros(parameters[name], (DateTime)applyMacroTime);
 				return (parmRegex == null) ? value : (parmRegex.IsMatch(value) ? value : null);
 			}
 			return string.Empty;

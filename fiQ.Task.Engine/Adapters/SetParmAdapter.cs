@@ -24,9 +24,10 @@ namespace fiQ.Task.Adapters
 			{
 				// Iterate through all keys in incoming parameter collection, and add to ReturnValues
 				// collection (performing no Regex validation, but processing macros):
+				var dt = DateTime.Now;
 				foreach (var key in parameters.GetKeys())
 				{
-					result.AddReturnValue(key, parameters.GetString(key, null, true));
+					result.AddReturnValue(key, parameters.GetString(key, null, dt));
 				}
 
 				result.Success = true;
