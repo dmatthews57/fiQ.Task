@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using fiQ.Task.Models;
@@ -26,20 +27,13 @@ namespace fiQ.Task.Adapters
 				// Retrieve and validate required parameters first:
 				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.REGEX_DIRPATH, DateTime.Now);
 				string filenameFilter = parameters.GetString("FilenameFilter");
-				string maxAge = parameters.GetString("MaxAge");
-				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter) || string.IsNullOrEmpty(maxAge))
+				var maxAge = parameters.Get<TimeSpan>("maxAge", TimeSpan.TryParse);
+				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter) || maxAge == null)
 				{
-					throw new ArgumentException("Missing one or more of SourceFolder/FilenameFilter/MaxAge");
-				}
-
-				// Ensure maxAge can be converted to TimeSpan, and determine minimum last write time for
-				// files not to be cleaned up:
-				if (!TimeSpan.TryParse(maxAge, out var tsMaxAge))
-				{
-					throw new ArgumentException("Invalid MaxAge format");
+					throw new ArgumentException("Missing or invalid: one or more of SourceFolder/FilenameFilter/MaxAge");
 				}
 				// Ignore sign on TimeSpan value (allow time to be specified either way):
-				var minLastWriteTime = DateTime.Now.Add(tsMaxAge.TotalMilliseconds > 0 ? tsMaxAge.Negate() : tsMaxAge);
+				var minLastWriteTime = DateTime.Now.Add((TimeSpan)(maxAge?.TotalMilliseconds > 0 ? maxAge?.Negate() : maxAge));
 
 				// Retrieve optional parameters (general):
 				string filenameRegex = parameters.GetString("FilenameRegex");
@@ -183,6 +177,5 @@ namespace fiQ.Task.Adapters
 			}
 			return result;
 		}
-
 	}
 }

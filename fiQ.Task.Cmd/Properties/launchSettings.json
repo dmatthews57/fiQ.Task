@@ -2,7 +2,7 @@
   "profiles": {
     "fiQ.Task.Cmd": {
       "commandName": "Project",
-      "commandLineArgs": "Smtp:Port=588 -TaskFolderz=C:\\TEMP -TaskFile=C:\\TEMP\\test2.json -jobname=\"TEST JOB\" -senderror=error@error.com @whatever=whatever @@sproc=\"<yyyyMMdd>\"",
+      "commandLineArgs": "Smtp:Port=588 -TaskFolderz=C:\\TEMP -TaskFile=C:\\TEMP\\testsql.json -jobname=\"TEST JOB\" -senderror=error@error.com @whatever=whatever @@sproc=\"<yyyyMMdd>\"",
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Development",
         "ConnectionStrings:TestDB2": "InvalidConStr"

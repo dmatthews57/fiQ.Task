@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.RegularExpressions;
 using fiQ.Task.Utilities;
 using Microsoft.Extensions.Configuration;
@@ -11,7 +12,7 @@ namespace fiQ.Task.Models
 	/// </summary>
 	public class TaskParameters
 	{
-		#region Fields and constructors
+		#region Fields, constructors and delegates
 		public string TaskName { get; init; }
 		public string AdapterClassName { get; init; }
 		public string AdapterDLLName { get; init; }
@@ -35,6 +36,10 @@ namespace fiQ.Task.Models
 		{
 			parameters = new Dictionary<string, string>(_parameters, StringComparer.OrdinalIgnoreCase);
 		}
+		/// <summary>
+		/// Delegate for generic strongly-typed parameter parsing (requires a TryParse or equivalent)
+		/// </summary>
+		public delegate bool TryParseHandler<T>(string value, out T result);
 		#endregion
 
 		#region Public methods - configuration accessors
@@ -44,6 +49,14 @@ namespace fiQ.Task.Models
 		public IEnumerable<string> GetKeys()
 		{
 			return parameters.Keys;
+		}
+
+		/// <summary>
+		/// Check whether dictionary contains the specified key
+		/// </summary>
+		public bool ContainsKey(string name)
+		{
+			return parameters.ContainsKey(name);
 		}
 
 		/// <summary>
@@ -90,6 +103,22 @@ namespace fiQ.Task.Models
 			}
 			// Default to false (if not configured, or not a "true" value):
 			return false;
+		}
+
+		/// <summary>
+		/// Retrieve strongly-typed value from parameter collection using specified conversion delegate
+		/// </summary>
+		public T? Get<T>(string name, TryParseHandler<T> handler) where T : struct
+		{
+			string value = parameters.ContainsKey(name) ? parameters[name] : null;
+			if (!string.IsNullOrEmpty(value))
+			{
+				if (handler(value, out var result))
+				{
+					return result;
+				}
+			}
+			return null;
 		}
 		#endregion
 
