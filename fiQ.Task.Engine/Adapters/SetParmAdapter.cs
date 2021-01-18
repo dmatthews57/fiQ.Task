@@ -11,8 +11,10 @@ namespace fiQ.Task.Adapters
 	/// </summary>
 	public class SetParmAdapter : TaskAdapter
 	{
-		public SetParmAdapter(IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
+		#region Fields and constructors
+		public SetParmAdapter(IConfiguration _config, ILogger<SetParmAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
+		#endregion
 
 		/// <summary>
 		/// Apply all values received in parameters collection to ReturnValue collection
@@ -24,10 +26,10 @@ namespace fiQ.Task.Adapters
 			{
 				// Iterate through all keys in incoming parameter collection, and add to ReturnValues
 				// collection (performing no Regex validation, but processing macros):
-				var dt = DateTime.Now;
+				var dateTimeNow = DateTime.Now;
 				foreach (var key in parameters.GetKeys())
 				{
-					result.AddReturnValue(key, parameters.GetString(key, null, dt));
+					result.AddReturnValue(key, parameters.GetString(key, null, dateTimeNow));
 				}
 
 				result.Success = true;

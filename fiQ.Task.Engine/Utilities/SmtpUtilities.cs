@@ -40,7 +40,11 @@ namespace fiQ.Task.Utilities
 		#endregion
 
 		#region IDisposable implementation
-		public void Dispose() => Dispose(true);
+		public void Dispose()
+		{
+			Dispose(true);
+			GC.SuppressFinalize(this);
+		}
 		protected virtual void Dispose(bool disposing)
 		{
 			if (disposed == false && disposing && smtpClient != null)

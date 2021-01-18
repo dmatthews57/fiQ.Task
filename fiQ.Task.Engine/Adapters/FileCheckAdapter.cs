@@ -18,11 +18,13 @@ namespace fiQ.Task.Adapters
 	/// </remarks>
 	public class FileCheckAdapter : TaskAdapter
 	{
-		public FileCheckAdapter(IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
+		#region Fields and constructors
+		public FileCheckAdapter(IConfiguration _config, ILogger<FileCheckAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
+		#endregion
 
 		/// <summary>
-		/// Check whether specified file(s) exist and set result
+		/// Check whether specified file(s) exist and set result accordingly
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{

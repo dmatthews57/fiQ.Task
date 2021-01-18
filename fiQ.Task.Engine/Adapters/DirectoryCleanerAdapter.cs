@@ -15,9 +15,15 @@ namespace fiQ.Task.Adapters
 {
 	public class DirectoryCleanerAdapter : TaskAdapter
 	{
+		#region Fields and constructors
 		public DirectoryCleanerAdapter(IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
+		#endregion
 
+		/// <summary>
+		/// Iterate through a specified folder (and optionally, subfolders), cleaning up files over a specified age
+		/// (optionally archiving them to zip file, first)
+		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
 			var result = new TaskResult();

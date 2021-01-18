@@ -37,7 +37,12 @@ namespace fiQ.Task.Engine
 		#endregion
 
 		#region IDisposable implementation
-		public void Dispose() => Dispose(true);
+		public void Dispose()
+		{
+			Dispose(true);
+			GC.SuppressFinalize(this);
+		}
+
 		protected virtual void Dispose(bool disposing)
 		{
 			if (disposed == false && disposing && loggerScope != null)
@@ -190,7 +195,7 @@ namespace fiQ.Task.Engine
 		/// <summary>
 		/// Construct a LoadAdapterException with provided return value and nested exception
 		/// </summary>
-		private LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, TaskParameters task)
+		private static LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, TaskParameters task)
 		{
 			return new LoadAdapterException(
 				errorCode,
