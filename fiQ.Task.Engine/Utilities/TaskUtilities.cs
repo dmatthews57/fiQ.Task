@@ -93,7 +93,7 @@ namespace fiQ.Task.Utilities
 			// Input string may contain multiple macro instances; pull all distinct matches from string for processing (any
 			// repeated macro only needs to be processed once, as all instances in the original string will be replaced):
 			var matches = REGEX_DATE_MACRO.Matches(macro)
-				.OfType<Match>()
+				.Cast<Match>()
 				.Select(m => m.Value)
 				.Distinct();
 			foreach (var match in matches)
@@ -104,7 +104,7 @@ namespace fiQ.Task.Utilities
 				#region Apply date adjustments
 				// Locate optional trailing time adjustment values contained in "[]" (for example, "[-2M][-d]" would deduct
 				// two months and one day from current time), and apply adjustments to DateTime value
-				var adjustments = REGEX_DATE_MACRO_ADJUST.Matches(match).OfType<Match>();
+				var adjustments = REGEX_DATE_MACRO_ADJUST.Matches(match).Cast<Match>();
 				foreach (var adjust in adjustments)
 				{
 					// If numeric value is provided, parse - otherwise assume a value of "1":

@@ -80,7 +80,7 @@ namespace fiQ.Task.Adapters
 								// Now process any nested macros in resulting argument value string, flattening match collection
 								// into name/value pair and selecting unique values only:
 								var argumentvaluemacromatches = argumentValueMacroRegex.Matches(argumentvalue)
-									.OfType<Match>()
+									.Cast<Match>()
 									.Select(match => new { Name = match.Groups["name"].Value, Value = match.Value })
 									.Distinct();
 								foreach (var match in argumentvaluemacromatches)
