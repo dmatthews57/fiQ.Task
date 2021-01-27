@@ -63,10 +63,8 @@ namespace fiQ.Task.Utilities
 		public bool SendEmail(string messageSubject, string messageBody, string messageTo = null, string messageFrom = null,
 			Stream attachment = null, string attachmentName = null)
 		{
-			Console.WriteLine($"Sending to {messageTo}:\n{messageSubject}\n{messageBody}");
-
 			/*
-			try
+			try // TODO: UNCOMMENT EMAIL
 			{
 				if (smtpClient == null) throw new InvalidOperationException("Client not initialized (configuration may be missing)");
 				using (var mailMessage = new MailMessage

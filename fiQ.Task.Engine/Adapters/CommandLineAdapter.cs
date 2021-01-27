@@ -24,8 +24,7 @@ namespace fiQ.Task.Adapters
 		#endregion
 
 		/// <summary>
-		/// Execute a specific executable file (from command line), constructing command string from optional arguments
-		/// and optionally validating numeric exit code
+		/// Execute ...
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
@@ -66,11 +65,11 @@ namespace fiQ.Task.Adapters
 							.OrderBy(argumentkey => argumentkey);
 						if (argumentkeys.Any())
 						{
-							// Set up regex to capture argument-named (with @ prefix) macros, to allow values passed as parameters to this adapter
-							// (directly in config or indirectly as return values output by previous adapters in batch) to be placed into command
-							// string. For example, if a previous adapter in this batch output return value "@FileID"/57, placing the parameter
-							// "Argument0"/"-File=<@@FileID>" in the configuration for THIS adapter will result in value "-File=57" being included
-							// in the command line to be executed:
+							// Set up regex to capture argument-named macros, to allow values passed as parameters to this adapter
+							// (including return values output by previous adapters in batch) to be placed directly into command string; for
+							// example if a previous adapter in this batch output return value "@FileID"/57, placing the parameter
+							// "Argument0"/"-FileID=<@@FileID>" in the collection for THIS adapter will result in value "-FileID=57" being
+							// placed in the command line to be executed:
 							var argumentValueMacroRegex = new Regex(@"<@(?<name>[^>]+)>");
 							foreach (string argumentkey in argumentkeys)
 							{
@@ -80,7 +79,7 @@ namespace fiQ.Task.Adapters
 								// Now process any nested macros in resulting argument value string, flattening match collection
 								// into name/value pair and selecting unique values only:
 								var argumentvaluemacromatches = argumentValueMacroRegex.Matches(argumentvalue)
-									.Cast<Match>()
+									.OfType<Match>()
 									.Select(match => new { Name = match.Groups["name"].Value, Value = match.Value })
 									.Distinct();
 								foreach (var match in argumentvaluemacromatches)
@@ -103,13 +102,13 @@ namespace fiQ.Task.Adapters
 						process.StartInfo.Arguments = $"/c \"{Regex.Replace(finalcommandstring, "\\\\?[\"]", "\\\"")}\" 2>&1";
 						logger.LogDebug($"Executing [{finalcommandstring}]");
 
-						// Don't execute command inside shell (directly launch cmd.exe process), capture console output to streams:
+						// Don't execute command inside shell (directly execute cmd.exe process), capture console output to streams:
 						process.StartInfo.UseShellExecute = false;
 						process.StartInfo.RedirectStandardOutput = true;
 						process.StartInfo.RedirectStandardError = true;
 
-						// Add event handler for console output data - adds any streamed output to StringBuilder, flags task
-						// completion when streams close (indicated by null event data received):
+						// Add event handler for console output data - adds any streamed output to StringBuilder, flags task completion
+						// when streams close (null data received):
 						var outputCompletionTask = new TaskCompletionSource<bool>();
 						process.OutputDataReceived += (sender, e) =>
 						{
@@ -131,12 +130,12 @@ namespace fiQ.Task.Adapters
 							processCompletionTask.TrySetResult(process.ExitCode);
 						};
 
-						// Launch process and begin asynchronous reading of output:
+						// Launch process, begin asynchronous reading of output:
 						process.Start();
 						process.BeginOutputReadLine();
 
-						// Wait for process to exit, then wait on output handles to close (to ensure all console output
-						// has been read and streams are properly cleaned up):
+						// Wait for process to exit, then wait on output handles to close (to ensure all console output is read
+						// and streams are properly cleaned up):
 						int returnValue = await processCompletionTask.Task.ConfigureAwait(false);
 						await outputCompletionTask.Task.ConfigureAwait(false);
 

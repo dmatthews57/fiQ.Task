@@ -46,6 +46,17 @@ namespace fiQ.Task.Models
 		}
 
 		/// <summary>
+		/// Merge a collection of values into return value set (overwriting, if necessary)
+		/// </summary>
+		public void MergeReturnValues(IReadOnlyDictionary<string, string> values)
+		{
+			foreach (var parm in values)
+			{
+				returnValues[parm.Key] = parm.Value;
+			}
+		}
+
+		/// <summary>
 		/// Add exception to list
 		/// </summary>
 		public void AddException(Exception ex)

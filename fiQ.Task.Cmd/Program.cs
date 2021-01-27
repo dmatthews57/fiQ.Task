@@ -245,7 +245,7 @@ namespace fiQ.Task.Cmd
 				#region Notify users of execution results, if required
 				if (logMessage.Length > 0)
 				{
-					Console.Error.WriteLine(logMessage);
+					//Console.Error.WriteLine(logMessage); // TODO: UNCOMMENT CONSOLE OUTPUT
 				}
 
 				// If configuration specifies that results should be emailed (or it specifies that errors should be

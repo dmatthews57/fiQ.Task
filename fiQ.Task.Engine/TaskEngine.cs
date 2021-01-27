@@ -70,38 +70,31 @@ namespace fiQ.Task.Engine
 						task.MergeParameters(tasksetresult.ReturnValues);
 
 						#region Execute TaskAdapter and handle result
-						try
-						{
 							var result = await t.ExecuteTask(task);
-							if (result.Success == false || result.Exceptions.Any()) // Execution failed, or succeeded with errors
+						if (result.Success == false || result.Exceptions.Any()) // Execution failed, or succeeded with errors
+						{
+							// Generate logging data for caller:
+							tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] {(result.Success ? "succeeded with errors" : "execution failed")}");
+							foreach (var ex in result.Exceptions)
 							{
-								// Generate logging data for caller:
-								tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] {(result.Success ? "succeeded with errors" : "execution failed")}");
-								foreach (var ex in result.Exceptions)
-								{
-									tasksetresult.LogMessage.AppendLine(ex.ToString());
-								}
-
-								// Update return value, unless it is already set to a higher (i.e. worse) value:
-								if (tasksetresult.ReturnValue < (result.Success ? 7 : 8))
-								{
-									tasksetresult.ReturnValue = (result.Success ? 7 : 8);
-								}
+								tasksetresult.LogMessage.AppendLine(ex.ToString());
 							}
-							else // Execution succeeded
+
+							// Update return value, unless it is already set to a higher (i.e. worse) value:
+							if (tasksetresult.ReturnValue < (result.Success ? 7 : 8))
 							{
-								tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] executed successfully");
-								if (tasksetresult.ReturnValue < 0)
-								{
-									tasksetresult.ReturnValue = 0;
-								}
-								// Merge any return values output by TaskAdapter into overall set result:
-								tasksetresult.MergeReturnValues(result.ReturnValues);
+								tasksetresult.ReturnValue = (result.Success ? 7 : 8);
 							}
 						}
-						catch (AggregateException ae) // Catches asynchronous exceptions only
+						else // Execution succeeded
 						{
-							throw TaskUtilities.SimplifyAggregateException(ae);
+							tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] executed successfully");
+							if (tasksetresult.ReturnValue < 0)
+							{
+								tasksetresult.ReturnValue = 0;
+							}
+							// Merge any return values output by TaskAdapter into overall set result:
+							tasksetresult.MergeReturnValues(result.ReturnValues);
 						}
 						#endregion
 					}
@@ -116,12 +109,15 @@ namespace fiQ.Task.Engine
 					// Add details to logging output:
 					tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] failed adapter creation: {ex}");
 				}
-				catch (Exception ex)
+				catch (Exception ex) // General exception (likely during TaskAdapter execution):
 				{
-					// General exception (likely during TaskAdapter execution):
 					if (tasksetresult.ReturnValue < 9)
 					{
 						tasksetresult.ReturnValue = 9;
+					}
+					if (ex is AggregateException ae) // Exception caught from async task; simplify if possible
+					{
+						ex = TaskUtilities.SimplifyAggregateException(ae);
 					}
 					// Add details to logging output:
 					tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] execution error: {ex}");

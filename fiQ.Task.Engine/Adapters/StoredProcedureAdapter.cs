@@ -50,87 +50,84 @@ namespace fiQ.Task.Adapters
 				#region Open database connection and execute procedure
 				using (var cnn = new SqlConnection(connectionString))
 				{
-					try
-					{
-						await cnn.OpenAsync();
-						// Capture console messages into StringBuilder:
-						cnn.InfoMessage += (object obj, SqlInfoMessageEventArgs e) => { consoleOutput.AppendLine(e.Message); };
+					await cnn.OpenAsync();
+					// Capture console messages into StringBuilder:
+					cnn.InfoMessage += (object obj, SqlInfoMessageEventArgs e) => { consoleOutput.AppendLine(e.Message); };
 
-						using (var cmd = new SqlCommand(storedProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
+					using (var cmd = new SqlCommand(storedProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
+					{
+						if (dbTimeout > 0) cmd.CommandTimeout = (int)dbTimeout;
+
+						#region Derive and apply procedure parameters
+						SqlCommandBuilder.DeriveParameters(cmd); // Note: synchronous (no async version available)
+						foreach (SqlParameter sqlParameter in cmd.Parameters)
 						{
-							if (dbTimeout > 0) cmd.CommandTimeout = (int)dbTimeout;
-
-							#region Derive and apply procedure parameters
-							SqlCommandBuilder.DeriveParameters(cmd); // Note: synchronous (no async version available)
-							foreach (SqlParameter sqlParameter in cmd.Parameters)
+							if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
 							{
-								if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
+								// This parameter requires input value - check for corresponding parameter:
+								if (parameters.ContainsKey(sqlParameter.ParameterName))
 								{
-									// This parameter requires input value - check for corresponding parameter:
-									if (parameters.ContainsKey(sqlParameter.ParameterName))
+									// Special case - strings are not automatically changed to Guid values, attempt explicit conversion:
+									if (sqlParameter.SqlDbType == SqlDbType.UniqueIdentifier)
 									{
-										// Special case - strings are not automatically changed to Guid values, attempt explicit conversion:
-										if (sqlParameter.SqlDbType == SqlDbType.UniqueIdentifier)
-										{
-											sqlParameter.Value = (object)parameters.Get<Guid>(sqlParameter.ParameterName, Guid.TryParse) ?? DBNull.Value;
-										}
-										else
-										{
-											// Apply string value to parameter (replacing null with DBNull):
-											sqlParameter.Value = (object)parameters.GetString(sqlParameter.ParameterName, null, dateTimeNow) ?? DBNull.Value;
-										}
+										sqlParameter.Value = (object)parameters.Get<Guid>(sqlParameter.ParameterName, Guid.TryParse) ?? DBNull.Value;
 									}
-									// If parameter value was not set above, and either we are set to supply default NULL
-									// values OR this is also an OUTPUT parameter, set to explicit NULL:
-									else if (defaultNulls || sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+									else
 									{
-										sqlParameter.Value = DBNull.Value;
+										// Apply string value to parameter (replacing null with DBNull):
+										sqlParameter.Value = (object)parameters.GetString(sqlParameter.ParameterName, null, dateTimeNow) ?? DBNull.Value;
 									}
-									// (otherwise, value will be left unspecified; if stored procedure does not provide a default
-									// value, execution will fail and missing parameter will be indicated by exception string)
 								}
-							}
-							#endregion
-
-							await cmd.ExecuteNonQueryAsync();
-
-							#region Extract output parameters into return values collection, validate return value
-							foreach (SqlParameter sqlParameter in cmd.Parameters)
-							{
-								if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+								// If parameter value was not set above, and either we are set to supply default NULL
+								// values OR this is also an OUTPUT parameter, set to explicit NULL:
+								else if (defaultNulls || sqlParameter.Direction.HasFlag(ParameterDirection.Output))
 								{
-									result.AddReturnValue(sqlParameter.ParameterName, sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value?.ToString());
+									sqlParameter.Value = DBNull.Value;
 								}
+								// (otherwise, value will be left unspecified; if stored procedure does not provide a default
+								// value, execution will fail and missing parameter will be indicated by exception string)
 							}
-
-							// If return value regex provided, check return value against it:
-							if (!string.IsNullOrEmpty(returnValueRegex))
-							{
-								string returnValue = result.ReturnValues.ContainsKey("@RETURN_VALUE") ? result.ReturnValues["@RETURN_VALUE"] : null;
-								if (string.IsNullOrEmpty(returnValue))
-								{
-									throw new Exception($"Stored procedure did not return a value (or no value retrieved)");
-								}
-								else if (!Regex.IsMatch(returnValue, returnValueRegex))
-								{
-									throw new Exception($"Invalid stored procedure return value ({returnValue})");
-								}
-							}
-							#endregion
-
-							// If this point is reached with no exception raised, operation was successful:
-							result.Success = true;
 						}
-					}
-					catch (AggregateException ae) // Catches asynchronous exceptions only
-					{
-						throw TaskUtilities.SimplifyAggregateException(ae);
+						#endregion
+
+						await cmd.ExecuteNonQueryAsync();
+
+						#region Extract output parameters into return values collection, validate return value
+						foreach (SqlParameter sqlParameter in cmd.Parameters)
+						{
+							if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+							{
+								result.AddReturnValue(sqlParameter.ParameterName, sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value?.ToString());
+							}
+						}
+
+						// If return value regex provided, check return value against it:
+						if (!string.IsNullOrEmpty(returnValueRegex))
+						{
+							string returnValue = result.ReturnValues.ContainsKey("@RETURN_VALUE") ? result.ReturnValues["@RETURN_VALUE"] : null;
+							if (string.IsNullOrEmpty(returnValue))
+							{
+								throw new Exception($"Stored procedure did not return a value (or no value retrieved)");
+							}
+							else if (!Regex.IsMatch(returnValue, returnValueRegex))
+							{
+								throw new Exception($"Invalid stored procedure return value ({returnValue})");
+							}
+						}
+						#endregion
+
+						// If this point is reached with no exception raised, operation was successful:
+						result.Success = true;
 					}
 				}
 				#endregion
 			}
 			catch (Exception ex)
 			{
+				if (ex is AggregateException ae) // Exception caught from async task; simplify if possible
+				{
+					ex = TaskUtilities.SimplifyAggregateException(ae);
+				}
 				logger.LogError(ex, "Procedure execution failed");
 				result.AddException(ex);
 			}

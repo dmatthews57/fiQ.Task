@@ -31,7 +31,7 @@ namespace fiQ.Task.Models
 
 		#region Methods
 		/// <summary>
-		/// Merge a collection of values into parameter set (overwriting, if necessary)
+		/// Merge a collection of values into return value set (overwriting, if necessary)
 		/// </summary>
 		public void MergeReturnValues(IReadOnlyDictionary<string, string> values)
 		{
