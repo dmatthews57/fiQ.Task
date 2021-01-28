@@ -99,7 +99,7 @@ namespace fiQ.Task.Adapters
 						// complete), adding command string in quotes (escaping any quotes within string itself), and ending by
 						// redirecting stderr to stdout (so all console output will be read in chronological order):
 						var finalcommandstring = commandstring.ToString();
-						process.StartInfo.Arguments = $"/c \"{Regex.Replace(finalcommandstring, "\\\\?[\"]", "\\\"")}\" 2>&1";
+						process.StartInfo.Arguments = $"/c \"{Regex.Replace(finalcommandstring, "\\\\?\"", "\\\"")}\" 2>&1";
 						logger.LogDebug($"Executing [{finalcommandstring}]");
 
 						// Don't execute command inside shell (directly execute cmd.exe process), capture console output to streams:

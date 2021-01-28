@@ -2,10 +2,10 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Data.SqlTypes;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using fiQ.Task.Models;
@@ -25,7 +25,10 @@ namespace fiQ.Task.Adapters
 		private bool suppressHeaders = false;           // If true, output files will not include CSV headers
 		private string delimiter = null;				// Used when outputting multiple columns (default comma)
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		private OutputColumnListSet outputColumnListSet = null;
+		private OutputColumnTemplateListSet outputColumnListSet = null;
+
+		private static Regex quoteregex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
+		private static Regex stringFormatRegex = new Regex(@"^[^{]*{0(,-?\d+)?(:.+)?}[^{]*$"); // string.Format style with single argument and optional formatting
 
 		public FileExportAdapter(IConfiguration _config, ILogger<FileExportAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
@@ -87,7 +90,7 @@ namespace fiQ.Task.Adapters
 				var outputColumnConfig = parameters.Configuration.GetSection("OutputColumns");
 				if (outputColumnConfig.Exists())
 				{
-					outputColumnListSet = outputColumnConfig.Get<OutputColumnListSet>().EnsureValid();
+					outputColumnListSet = outputColumnConfig.Get<OutputColumnTemplateListSet>().EnsureValid();
 				}
 				#endregion
 
@@ -135,7 +138,7 @@ namespace fiQ.Task.Adapters
 									}
 									else
 									{
-										logger.LogWarning("Discarded row from dataset (null FileID)");
+										logger.LogWarning("Discarded row from queue dataset (null FileID)");
 									}
 								}
 							}
@@ -321,14 +324,26 @@ namespace fiQ.Task.Adapters
 					// may be possible to replace this block entirely if this changes in the future)
 					if (dr.VisibleFieldCount > 0)
 					{
+						int i = 0;
 						do
 						{
+							var dataTable = new DataTable($"DataTable{i++}");
+
 							#region Construct DataTable column collection from reader schema
-							var dataTable = new DataTable();
 							var schemaTable = await dr.GetSchemaTableAsync();
 							foreach (DataRow schemarow in schemaTable.Rows)
 							{
-								dataTable.Columns.Add(new DataColumn((string)schemarow["ColumnName"], (Type)schemarow["DataType"]));
+								var column = new DataColumn((string)schemarow["ColumnName"], (Type)schemarow["DataType"]);
+
+								// If provider-specific data typing is available, save as extended property:
+								if (schemaTable.Columns.Contains("ProviderSpecificDataType"))
+								{
+									if (schemarow["ProviderSpecificDataType"] is Type type)
+									{
+										column.ExtendedProperties.Add("ProviderType", type);
+									}
+								}
+								dataTable.Columns.Add(column);
 							}
 							#endregion
 
@@ -339,8 +354,9 @@ namespace fiQ.Task.Adapters
 								dr.GetValues(values);
 								dataTable.Rows.Add(values);
 							}
-							dataSet.Tables.Add(dataTable);
 							#endregion
+
+							dataSet.Tables.Add(dataTable);
 						}
 						while (await dr.NextResultAsync());
 					}
@@ -395,49 +411,132 @@ namespace fiQ.Task.Adapters
 			var exportFilenames = string.IsNullOrEmpty(exportFilename) ? new Queue<string>() : new Queue<string>(exportFilename.Split(';'));
 
 			#region Iterate through all datatables in dataset, creating and writing contents to files
-			for (int i = 0; i < dataSet.Tables.Count; ++i)
+			for (int tblidx = 0; tblidx < dataSet.Tables.Count; ++tblidx)
 			{
 				// Retrieve next available filename from queue (if any available):
 				var filename = exportFilenames.Count > 0 ? exportFilenames.Dequeue() : null;
 
 				// If there are no rows in this table and we are suppressing empty datatables, continue to next
 				// table (doesn't matter whether we have a valid filename or not in this case)
-				if (dataSet.Tables[i].Rows.Count == 0 && suppressIfEmpty)
+				if (dataSet.Tables[tblidx].Rows.Count == 0 && suppressIfEmpty)
 				{
-					logger.LogInformation($"File [{filename ?? "(null)"}] not produced (datatable {i} is empty, suppressed)");
+					logger.LogInformation($"File [{filename ?? "(null)"}] not produced ({dataSet.Tables[tblidx].TableName} is empty, suppressed)");
 				}
 				// If filename is NULL (as opposed to blank), we have more datatables than filenames - throw exception:
 				else if (filename == null)
 				{
-					throw new Exception($"Unable to export datatable {i} (no filename available)");
+					throw new Exception($"Unable to export {dataSet.Tables[tblidx].TableName} (no filename available)");
 				}
 				// If filename is provided but blank, we are discarding this datatable:
 				else if (string.IsNullOrEmpty(filename))
 				{
-					logger.LogInformation($"Discarded {dataSet.Tables[i].Rows.Count} rows from datatable {i} (blank filename)");
+					logger.LogInformation($"Discarded {dataSet.Tables[tblidx].Rows.Count} row(s) from {dataSet.Tables[tblidx].TableName} (blank filename)");
 				}
 				// Otherwise, we have data to potentially export and a filename to write to:
 				else
 				{
+					var boundColumns = new List<OutputColumnBound>();
+					string exportFilePath = Path.Combine(exportFolder, filename);
+
 					// Check for an explicit column listing for this table:
-					var outputColumnList = outputColumnListSet?.GetOutputColumnList(i);
-					if (outputColumnList != null)
+					var outputColumnList = outputColumnListSet?.GetOutputColumnList(tblidx);
+					if (outputColumnList?.Count == 0)
 					{
-						// Explicit column listing found - if there are no columns included (i.e. all were explicitly excluded
-						// from output), discard this datatable:
-						if (outputColumnList.Count == 0)
+						// Explicit column listing found, but no columns included (i.e. all were explicitly excluded from output), discard:
+						logger.LogInformation($"Discarded {dataSet.Tables[tblidx].Rows.Count} row(s) from {dataSet.Tables[tblidx].TableName} (all columns excluded by config)");
+					}
+					else if (outputColumnList != null)
+					{
+						#region Construct bound output column collection from explicit column listing
+						var validationerrors = new List<Exception>();
+						for (int ocolidx = 0; ocolidx < outputColumnList.Count; ++ocolidx)
 						{
-							logger.LogInformation($"Discarded {dataSet.Tables[i].Rows.Count} rows from datatable {i} (all columns excluded by config)");
+							// Ensure datatable contains a column with this name:
+							if (!dataSet.Tables[tblidx].Columns.Contains(outputColumnList[ocolidx].ColumnName))
+							{
+								validationerrors.Add(new ArgumentException($"Column {outputColumnList[ocolidx].ColumnName} does not exist in {dataSet.Tables[tblidx].TableName}"));
+								continue; // Skip logic below, we will be throwing anyway (but want to catch any other column validation errors first)
+							}
+
+							// Add column to bound collection for use in data rendering logic below:
+							var column = dataSet.Tables[tblidx].Columns[outputColumnList[ocolidx].ColumnName];
+							boundColumns.Add(new OutputColumnBound
+							{
+								ColumnName = string.IsNullOrEmpty(outputColumnList[ocolidx].OutputNameOverride) ? column.ColumnName : outputColumnList[ocolidx].OutputNameOverride,
+								Ordinal = column.Ordinal,
+								ColumnType = column.DataType,
+								ProviderType = column.ExtendedProperties["ProviderType"] as Type,
+								FormatMethod = outputColumnList[ocolidx].FormatMethod,
+								FormatString = outputColumnList[ocolidx].FormatString
+							});
 						}
-						else // Otherwise, write datatable to target file with explicit formatting:
+						// If any columns failed to validate above, throw exception now:
+						if (validationerrors.Count > 0)
 						{
-							await WriteTableExplicit(dataSet.Tables[i], outputColumnList, Path.Combine(exportFolder, filename));
+							throw new AggregateException(validationerrors);
+						}
+						#endregion
+					}
+					else
+					{
+						#region Construct bound column collection from datatable metadata
+						for (int dcolidx = 0; dcolidx < dataSet.Tables[tblidx].Columns.Count; ++dcolidx)
+						{
+							boundColumns.Add(new OutputColumnBound
+							{
+								ColumnName = dataSet.Tables[tblidx].Columns[dcolidx].ColumnName,
+								Ordinal = dcolidx,
+								ColumnType = dataSet.Tables[tblidx].Columns[dcolidx].DataType,
+								ProviderType = dataSet.Tables[tblidx].Columns[dcolidx].ExtendedProperties["ProviderType"] as Type,
+								FormatMethod = Format.Auto
+							});
+						}
+						#endregion
+					}
+
+					logger.LogDebug($"Exporting {dataSet.Tables[tblidx].Rows.Count} rows from {dataSet.Tables[tblidx].TableName} to {exportFilePath}");
+
+					#region Open destination file, write file header (if required) followed by detail records
+					int rowidx = -1, colidx = -1;
+					try
+					{
+						using var filestream = new FileStream(exportFilePath, FileMode.Create, FileAccess.Write, FileShare.None); // TODO: SUPPORT PGP?
+						using var streamwriter = new StreamWriter(filestream);
+						if (!suppressHeaders)
+						{
+							for (colidx = 0; colidx < boundColumns.Count; ++colidx)
+							{
+								if (colidx > 0) await streamwriter.WriteAsync(delimiter);
+								await streamwriter.WriteAsync(boundColumns[colidx].ColumnName.Replace(delimiter, string.Empty));
+							}
+							await streamwriter.WriteLineAsync();
+						}
+						for (rowidx = 0; rowidx < dataSet.Tables[tblidx].Rows.Count; ++rowidx)
+						{
+							for (colidx = 0; colidx < boundColumns.Count; ++colidx)
+							{
+								if (colidx > 0) await streamwriter.WriteAsync(delimiter);
+								await streamwriter.WriteAsync(boundColumns[colidx].OutputValue(dataSet.Tables[tblidx].Rows[rowidx]));
+							}
+							await streamwriter.WriteLineAsync();
 						}
 					}
-					else // No explicit column listing, write datatable to target file dynamically:
+					catch (Exception ex)
 					{
-						await WriteTableDynamic(dataSet.Tables[i], Path.Combine(exportFolder, filename));
+						var exmessage = new StringBuilder("Exception writing ")
+							.Append(dataSet.Tables[tblidx].TableName)
+							.Append(" to ")
+							.Append(exportFilePath);
+						if (colidx >= 0)
+						{
+							if (rowidx >= 0) exmessage.AppendFormat(" at row {0} column {1}", rowidx, colidx);
+							else exmessage.AppendFormat(" at header row column {0}", colidx);
+						}
+						throw new Exception(exmessage.ToString(), ex is AggregateException ae ? TaskUtilities.SimplifyAggregateException(ae) : ex);
 					}
+					#endregion
+
+					logger.LogInformation($"Wrote {dataSet.Tables[tblidx].Rows.Count} rows from {dataSet.Tables[tblidx].TableName} to {exportFilePath}");
 				}
 			}
 			#endregion
@@ -455,49 +554,24 @@ namespace fiQ.Task.Adapters
 			// Return output collection from export procedure, to be added to task return values:
 			return outputParameters;
 		}
-
-		/// <summary>
-		/// Write data table contents into target file, dynamically determining columns
-		/// </summary>
-		private async System.Threading.Tasks.Task WriteTableDynamic(DataTable dataTable, string exportFilePath)
-		{
-			logger.LogInformation($"Exporting {dataTable.Rows.Count} rows to {exportFilePath}");
-		}
-		/// <summary>
-		/// Write data table contents into target file, binding column values as indicated by explicit column list
-		/// </summary>
-		private async System.Threading.Tasks.Task WriteTableExplicit(DataTable dataTable, List<OutputColumn> outputColumnList, string exportFilePath)
-		{
-			logger.LogInformation($"Exporting {dataTable.Rows.Count} rows to {exportFilePath} with {outputColumnList.Count} explicit columns");
-
-			using var outputstream = Console.OpenStandardOutput();
-			using var streamwriter = new StreamWriter(outputstream);
-			var quoteregex = new Regex("\\\\?[\"]"); // Detect double-quote, optionally preceded by backslash
-
-			#region Write file header
-			if (!suppressHeaders)
-			{
-				for (int i = 0; i < outputColumnList.Count; ++i)
-				{
-					if (i > 0) await streamwriter.WriteAsync(delimiter);
-					string columnName = string.IsNullOrEmpty(outputColumnList[i].OutputNameOverride) ? outputColumnList[i].ColumnName : outputColumnList[i].OutputNameOverride;
-					await streamwriter.WriteAsync(columnName.IndexOf(delimiter) >= 0 ? $"\"{quoteregex.Replace(columnName, "\\\"")}\"" : columnName);
-				}
-				await streamwriter.WriteLineAsync();
-			}
-			#endregion
-
-			// TODO: CONTINUE ON TO DATA...
-		}
 		#endregion
 
-		#region Private class definitions
-		/// <summary>
-		/// Container class for explicit output behavior for a single column from result set
-		/// </summary>
-		private class OutputColumn
+		#region Private class definitions - Output column control
+		public enum Format
 		{
-			#region Fields and enums
+			Exclude,    // Exclude this column from output
+			Auto,       // Dynamically format columns into strings based on column type
+			Raw,        // Dump column values directly to file using ToString
+			Explicit    // Use string.Format(FormatString) or [cell].ToString(FormatString) to generate output
+		};
+
+		/// <summary>
+		/// Configuration template for container class detailing explicit output behavior for a
+		/// single column from result set
+		/// </summary>
+		private class OutputColumnTemplate
+		{
+			#region Fields
 			/// <summary>
 			/// Name of column in dataset output by stored procedure
 			/// </summary>
@@ -514,14 +588,6 @@ namespace fiQ.Task.Adapters
 			/// Format string for Explicit formatting method
 			/// </summary>
 			public string FormatString { get; init; } = null;
-
-			public enum Format
-			{
-				Exclude,	// Exclude this column from output
-				Auto,       // Dynamically format columns into strings based on column type
-				Raw,        // Dump column values directly to file using ToString
-				Explicit    // Use string.Format with FormatString to generate output
-			};
 			#endregion
 
 			#region Methods
@@ -533,9 +599,10 @@ namespace fiQ.Task.Adapters
 					return true;
 				}
 				// If formatting is being done explicitly, format string is required:
-				else if (FormatMethod == Format.Explicit && string.IsNullOrEmpty(FormatString))
+				else if (FormatMethod == Format.Explicit)
 				{
-					return true;
+					if (string.IsNullOrEmpty(FormatString)) return true;
+					else if (!stringFormatRegex.IsMatch(FormatString)) return true;
 				}
 				// Otherwise, column is valid output:
 				return false;
@@ -544,23 +611,24 @@ namespace fiQ.Task.Adapters
 		}
 
 		/// <summary>
-		/// Collection class for a set of OutputColumn lists (each corresponding to a result set
-		/// from export stored procedure), or single shared list (for all result sets)
+		/// Collection class for a set of OutputColumnTemplate lists (each corresponding to a
+		/// result set from export stored procedure), or single shared list (for all result sets)
 		/// </summary>
-		private class OutputColumnListSet
+		private class OutputColumnTemplateListSet
 		{
 			#region Fields
 			/// <summary>
-			/// List of ColumnSet lists
+			/// List of OutputColumnTemplate lists (each entry in outer list is for a specific
+			/// result set, each entry in inner list is for a column within that result set)
 			/// </summary>
-			public List<List<OutputColumn>> ColumnListSet { get; init; } = null;
+			public List<List<OutputColumnTemplate>> ColumnListSet { get; init; } = null;
 			#endregion
 
 			#region Methods
 			/// <summary>
 			/// Retrieve column listing for the dataset at the specified ordinal
 			/// </summary>
-			public List<OutputColumn> GetOutputColumnList(int dataset)
+			public List<OutputColumnTemplate> GetOutputColumnList(int dataset)
 			{
 				// If no column data has been loaded, throw exception:
 				if (ColumnListSet.Count == 0)
@@ -583,7 +651,7 @@ namespace fiQ.Task.Adapters
 			/// loaded, and that there are no invalid entries in any loaded list
 			/// </summary>
 			/// <returns></returns>
-			public OutputColumnListSet EnsureValid()
+			public OutputColumnTemplateListSet EnsureValid()
 			{
 				// If column lists have not been loaded, throw exception:
 				if ((ColumnListSet?.Count ?? 0) == 0)
@@ -591,29 +659,94 @@ namespace fiQ.Task.Adapters
 					throw new ArgumentException("Output column configuration is present, but no column data loaded");
 				}
 
+				var validationerrors = new List<Exception>();
+				bool columnsfound = false;
+
 				// Iterate through column lists, removing excluded columns (which may have been included in
 				// configuration to prevent IConfiguration from ignoring them entirely) and validating:
-				foreach (var columnList in ColumnListSet)
+				for (int i = 0; i < ColumnListSet.Count; ++i)
 				{
-					columnList.RemoveAll(column => column.FormatMethod == OutputColumn.Format.Exclude);
-					if (columnList.Any(column => column.IsInvalid()))
+					ColumnListSet[i].RemoveAll(column => column.FormatMethod == Format.Exclude);
+					if (ColumnListSet[i].Count > 0)
 					{
-						throw new InvalidDataException("One or more output column lists include invalid entries");
+						columnsfound = true; // Flag that there is at least one non-empty list
+						if (ColumnListSet[i].Any(column => column.IsInvalid()))
+						{
+							validationerrors.Add(new Exception($"Column list for dataset {i} includes invalid entries"));
+						}
 					}
 				}
 
-				// If none of the loaded column lists include any output columns, throw exception:
-				if (!ColumnListSet.Any(columnlist => columnlist.Count > 0))
+				// Ensure at least one of the loaded lists include columns:
+				if (!columnsfound)
 				{
-					throw new ArgumentException("Output column configuration is present, but no column lists include output columns");
+					validationerrors.Add(new ArgumentException("Output column configuration is present, but no column lists include output columns"));
 				}
 
-				// Otherwise, assume we are good:
-				return this;
+				// If exceptions were added to collection, throw now (otherwise assume we are good):
+				return validationerrors.Count > 0 ? throw new AggregateException(validationerrors) : this;
 			}
 			#endregion
 		}
 
+		/// <summary>
+		/// Container class for explicit output behavior of the column at the specified Ordinal (built from
+		/// metadata of actual result set, combined with OutputColumnTemplate if present)
+		/// </summary>
+		private class OutputColumnBound
+		{
+			#region Fields
+			public string ColumnName { get; init; }
+			public int Ordinal { get; init; }
+			public Type ColumnType { get; init; }
+			public Type ProviderType { get; init; }
+			public Format FormatMethod { get; init; }
+			public string FormatString { get; init; }
+			#endregion
+
+			#region Methods
+			public string OutputValue(DataRow row)
+			{
+				if (row[Ordinal] is byte[] byteval)
+				{
+					// Special handling required for binary/varbinary fields - convert to hex first:
+					var converted = BitConverter.ToString(byteval).Replace("-", string.Empty);
+					return FormatMethod switch
+					{
+						Format.Explicit => string.Format(FormatString, converted),
+						Format.Auto => "0x" + converted,
+						_ => converted
+					};
+				}
+				else if (FormatMethod == Format.Explicit) // Let string.Format handle any type-specific logic
+				{
+					return string.Format(FormatString, row[Ordinal]);
+				}
+				else if (FormatMethod == Format.Raw) // No formatting required, convert directly to string
+				{
+					return row[Ordinal].ToString();
+				}
+
+				// (Note from this point onward, FormatMethod is assumed to be Auto)
+
+				else if (ProviderType == typeof(SqlMoney) && row[Ordinal] is decimal decval) // Format SqlMoney fields as currency
+				{
+					return decval.ToString("C");
+				}
+				else if (row[Ordinal] is string strval)
+				{
+					return strval; // TODO: FORMATTING, ETC
+				}
+				else // Default case - no formatting required, just convert to string directly:
+				{
+					return row[Ordinal].ToString();
+				}
+			}
+			#endregion
+		}
+		#endregion
+
+		#region Private class definitions - Misc
 		/// <summary>
 		/// Container class for a file ready to be exported, as returned by queue check procedure
 		/// </summary>
