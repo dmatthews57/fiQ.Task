@@ -1,12 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	/// <summary>
 	/// Base class for TaskAdapter (class which will perform execution of a particular task step)

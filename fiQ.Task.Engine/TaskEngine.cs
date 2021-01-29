@@ -1,18 +1,15 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
-using fiQ.Task.Adapters;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskAdapters;
+using fiQ.TaskModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Engine
+namespace fiQ
 {
 	/// <summary>
 	/// Class responsible for creating and executing TaskAdapters based on incoming configuration
@@ -117,7 +114,7 @@ namespace fiQ.Task.Engine
 					}
 					if (ex is AggregateException ae) // Exception caught from async task; simplify if possible
 					{
-						ex = TaskUtilities.SimplifyAggregateException(ae);
+						ex = TaskUtilities.General.SimplifyAggregateException(ae);
 					}
 					// Add details to logging output:
 					tasksetresult.LogMessage.AppendLine($"Task [{task.TaskName}] execution error: {ex}");

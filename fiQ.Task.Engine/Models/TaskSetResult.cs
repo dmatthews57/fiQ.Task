@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace fiQ.Task.Models
+namespace fiQ.TaskModels
 {
 	/// <summary>
 	/// Container class for return data from TaskEngine's Execute function (representing execution of

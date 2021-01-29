@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace fiQ.Task.Models
+namespace fiQ.TaskModels
 {
 	/// <summary>
 	/// Container class for return data from a single TaskAdapter's ExecuteTask function

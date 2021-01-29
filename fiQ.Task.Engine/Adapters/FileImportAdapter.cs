@@ -1,10 +1,10 @@
 ﻿using System;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	public class FileImportAdapter : TaskAdapter
 	{

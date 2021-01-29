@@ -1,27 +1,30 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 using Org.BouncyCastle.Security;
 
-namespace fiQ.Task.Utilities
+namespace fiQ.TaskUtilities
 {
-	public static class PGPUtilities
+	public static class Pgp
 	{
-		#region Public methods
+		#region Public methods - Encryption
 		/// <summary>
-		/// PGP-encrypt data from source to destination stream in raw/binary format
+		/// PGP-encrypt all data from source stream into destination stream in raw/binary format
 		/// </summary>
 		/// <param name="publickeysource">Input stream containing public keyring bundle</param>
-		/// <param name="publickeyuserid">UserID of key to be used within keyring bundle (if null/empty, first available key will be used)</param>
+		/// <param name="publickeyuserid">UserID of key to be used within keyring bundle (if null/empty, first available key in ring will be used)</param>
 		/// <param name="clearinput">Input stream containing source data to be encrypted</param>
-		/// <param name="encryptedoutput">Output stream to receive encrypted data</param>
+		/// <param name="encryptedoutput">Output stream to receive raw encrypted data</param>
 		/// <remarks>
-		/// Public key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
+		/// - Source data will be read asynchronously
+		/// - Destination data will be written asynchronously
+		/// - Public key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
+		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
 		/// </remarks>
-		public static async System.Threading.Tasks.Task EncryptRaw(Stream publickeysource, string publickeyuserid, Stream clearinput, Stream encryptedoutput)
+		public static async Task EncryptRaw(Stream publickeysource, string publickeyuserid, Stream clearinput, Stream encryptedoutput)
 		{
 			// Create encrypted data generator, using public key extracted from provided source:
 			var pgpEncDataGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
@@ -45,17 +48,21 @@ namespace fiQ.Task.Utilities
 				}
 			}
 		}
+
 		/// <summary>
-		/// PGP-encrypt data from source to destination stream in ASCII-armored format
+		/// PGP-encrypt all data from source to destination stream in ASCII-armored format
 		/// </summary>
 		/// <param name="publickeysource">Input stream containing public keyring bundle</param>
-		/// <param name="publickeyuserid">UserID of key to be used within keyring bundle (if null/empty, first available key will be used)</param>
+		/// <param name="publickeyuserid">UserID of key to be used within keyring bundle (if null/empty, first available key in ring will be used)</param>
 		/// <param name="clearinput">Input stream containing source data to be encrypted</param>
-		/// <param name="encryptedoutput">Output stream to receive encrypted data</param>
+		/// <param name="encryptedoutput">Output stream to receive ASCII-armored encrypted data</param>
 		/// <remarks>
-		/// Public key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
+		/// - Source data will be read asynchronously
+		/// - Destination data will be written asynchronously
+		/// - Public key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
+		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
 		/// </remarks>
-		public static async System.Threading.Tasks.Task Encrypt(Stream publickeysource, string publickeyuserid, Stream clearinput, Stream encryptedoutput)
+		public static async Task Encrypt(Stream publickeysource, string publickeyuserid, Stream clearinput, Stream encryptedoutput)
 		{
 			// Call raw encryption function with armored output stream wrapping destination:
 			using (var armor = new ArmoredOutputStream(encryptedoutput))
@@ -65,18 +72,114 @@ namespace fiQ.Task.Utilities
 		}
 
 		/// <summary>
-		/// PGP-decrypt data from source to destination stream
+		/// Build PGP-encrypting (raw/binary format) stream around the provided output stream
+		/// </summary>
+		/// <param name="publickeysource">Input stream containing public keyring bundle</param>
+		/// <param name="publickeyuserid">UserID of key to be used within keyring bundle (if null/empty, first available key in ring will be used)</param>
+		/// <param name="encryptedoutput">Output stream to receive raw/binary encrypted data</param>
+		/// <returns>
+		/// A StreamStack object, into which cleartext data can be written (resulting in encrypted data being written to encryptedoutput)
+		/// </returns>
+		/// <remarks>
+		/// - Caller is responsible for disposing of returned StreamStack (BEFORE disposing of original encryptedoutput Stream)
+		/// - Caller is also still responsible for disposing of encryptedinput stream (AFTER disposing of returned StreamStack)
+		/// - Public key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
+		/// </remarks>
+		public static StreamStack GetEncryptionStreamRaw(Stream publickeysource, string publickeyuserid, Stream encryptedoutput)
+		{
+			var encryptionstream = new StreamStack();
+			try
+			{
+				// Create encrypted data generator using public key extracted from provided source:
+				var pgpEncDataGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
+				pgpEncDataGen.AddMethod(ExtractPublicKey(publickeysource, publickeyuserid));
+
+				// Create encrypted data generator stream around destination stream and push on to return value stack:
+				encryptionstream.PushStream(pgpEncDataGen.Open(encryptedoutput, new byte[1024]));
+
+				// Create compressed data generator stream around encryption stream and push on to return value stack:
+				var comData = new PgpCompressedDataGenerator(CompressionAlgorithmTag.Zip);
+				encryptionstream.PushStream(comData.Open(encryptionstream.GetStream()));
+
+				// Create literal data generator stream around compression stream and push on to return value stack:
+				var lData = new PgpLiteralDataGenerator();
+				encryptionstream.PushStream(lData.Open(encryptionstream.GetStream(), PgpLiteralData.Binary, string.Empty, DateTime.UtcNow, new byte[1024]));
+
+				// Return stream object (data written to stream at top of stack will be literalized -> compressed -> encrypted):
+				return encryptionstream;
+			}
+			catch
+			{
+				encryptionstream.Dispose();
+				throw;
+			}
+		}
+
+		/// <summary>
+		/// Build PGP-encrypting (ASCII-armored format) stream around the provided output stream
+		/// </summary>
+		/// <param name="publickeysource">Input stream containing public keyring bundle</param>
+		/// <param name="publickeyuserid">UserID of key to be used within keyring bundle (if null/empty, first available key in ring will be used)</param>
+		/// <param name="encryptedoutput">Output stream to receive ASCII-armored encrypted data</param>
+		/// <returns>
+		/// A StreamStack object, into which cleartext data can be written (resulting in encrypted data being written to encryptedoutput)
+		/// </returns>
+		/// <remarks>
+		/// - Caller is responsible for disposing of returned StreamStack (BEFORE disposing of original encryptedoutput Stream)
+		/// - Caller is also still responsible for disposing of encryptedinput stream (AFTER disposing of returned StreamStack)
+		/// - Public key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
+		/// </remarks>
+		public static StreamStack GetEncryptionStream(Stream publickeysource, string publickeyuserid, Stream encryptedoutput)
+		{
+			var encryptionstream = new StreamStack();
+			try
+			{
+				// Create armored output stream wrapping destination stream and push on to return value stack:
+				encryptionstream.PushStream(new ArmoredOutputStream(encryptedoutput));
+
+				// Create encrypted data generator using public key extracted from provided source:
+				var pgpEncDataGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
+				pgpEncDataGen.AddMethod(ExtractPublicKey(publickeysource, publickeyuserid));
+
+				// Create encrypted data generator stream around armored output stream and push on to return value stack:
+				encryptionstream.PushStream(pgpEncDataGen.Open(encryptionstream.GetStream(), new byte[1024]));
+
+				// Create compressed data generator stream around encryption stream and push on to return value stack:
+				var comData = new PgpCompressedDataGenerator(CompressionAlgorithmTag.Zip);
+				encryptionstream.PushStream(comData.Open(encryptionstream.GetStream()));
+
+				// Create literal data generator stream around compression stream and push on to return value stack:
+				var lData = new PgpLiteralDataGenerator();
+				encryptionstream.PushStream(lData.Open(encryptionstream.GetStream(), PgpLiteralData.Binary, string.Empty, DateTime.UtcNow, new byte[1024]));
+
+				// Return stream object (data written to top stream will be literalized -> compressed -> encrypted -> armored):
+				return encryptionstream;
+			}
+			catch
+			{
+				encryptionstream.Dispose();
+				throw;
+			}
+		}
+		#endregion
+
+		#region Public functions - Decryption
+		/// <summary>
+		/// PGP-decrypt all data from source stream into destination stream
 		/// </summary>
 		/// <param name="privatekeysource">Input stream containing private keyring bundle</param>
 		/// <param name="privatekeypassphrase">Passphrase to access private key (if required)</param>
 		/// <param name="encryptedinput">Input stream containing source data to be decrypted</param>
 		/// <param name="clearoutput">Output stream to receive decrypted data</param>
 		/// <remarks>
-		/// - Private key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
+		/// - Private key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
+		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
 		/// - Destination data stream will be written asynchronously, but source data stream will be read synchronously (due to limitation in PGP
-		/// library; again if a concern, caller should pull data into a local stream asynchronously before calling this function)
+		/// library; all source data must be available to perform decryption, but source library does not provide async option). If this is a concern,
+		/// caller should consider asynchronously pulling source data into local stream first and passing local stream to this function (if increased
+		/// use of memory outweighs waiting for blocked thread to perform I/O)
 		/// </remarks>
-		public static async System.Threading.Tasks.Task Decrypt(Stream privatekeysource, string privatekeypassphrase, Stream encryptedinput, Stream clearoutput)
+		public static async Task Decrypt(Stream privatekeysource, string privatekeypassphrase, Stream encryptedinput, Stream clearoutput)
 		{
 			// Create object factory using DecoderStream to read PGP data from source, use factory to extract encrypted data:
 			using (var decoder = PgpUtilities.GetDecoderStream(encryptedinput))
@@ -93,21 +196,26 @@ namespace fiQ.Task.Utilities
 		}
 
 		/// <summary>
-		/// Create stream from a PGP-encrypted input stream, from which PGP-decrypted data can be read
+		/// Create PGP-decrypting stream around a PGP-encrypted input source stream
 		/// </summary>
 		/// <param name="privatekeysource">Input stream containing private keyring bundle</param>
 		/// <param name="privatekeypassphrase">Passphrase to access private key (if required)</param>
 		/// <param name="encryptedinput">Input stream containing source data to be decrypted</param>
 		/// <returns>
-		/// A DecryptionStream object (caller is responsible for disposing)
+		/// A StreamStack object, from which decrypted data can be read
 		/// </returns>
 		/// <remarks>
-		/// - Private key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
-		/// - Source data stream will be read synchronously (again if a concern, caller should pull data into a local stream asynchronously before calling this function)
+		/// - Caller is responsible for disposing of returned StreamStack (BEFORE disposing of original encryptedinput Stream)
+		/// - Caller is also still responsible for disposing of encryptedinput stream (AFTER disposing of returned StreamStack)
+		/// - Private key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
+		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
+		/// - Source data stream will be read synchronously (due to limitation in PGP library; all source data must be available to perform decryption,
+		/// but source library does not provide async option). If this is a concern, caller should consider asynchronously pulling source data into local
+		/// stream first and passing local stream to this function (if increased use of memory outweighs waiting for blocked thread to perform I/O)
 		/// </remarks>
-		public static DecryptionStream GetDecryptionStream(Stream privatekeysource, string privatekeypassphrase, Stream encryptedinput)
+		public static StreamStack GetDecryptionStream(Stream privatekeysource, string privatekeypassphrase, Stream encryptedinput)
 		{
-			var decryptionstream = new DecryptionStream();
+			var decryptionstream = new StreamStack();
 			try
 			{
 				// Open decoder stream and push on to return value stack:
@@ -200,56 +308,6 @@ namespace fiQ.Task.Utilities
 				?.FirstOrDefault(key => key != null) ?? throw new ArgumentException("Invalid key ring or public key not found");
 		}
 		#endregion
-
-		#region Classes
-		/// <summary>
-		/// Wrapper class to hold series of streams necessary for PGP decryption, and handle disposal
-		/// </summary>
-		public class DecryptionStream : IDisposable
-		{
-			#region Fields
-			private Stack<Stream> streams = new Stack<Stream>();
-			private bool disposed = false;
-			#endregion
-
-			#region IDisposable implementation
-			public void Dispose()
-			{
-				Dispose(true);
-				GC.SuppressFinalize(this);
-			}
-			protected virtual void Dispose(bool disposing)
-			{
-				if (disposed == false && disposing)
-				{
-					while (streams.Count > 0)
-					{
-						var stream = streams.Pop();
-						stream.Dispose();
-					}
-				}
-				disposed = true;
-			}
-			#endregion
-
-			#region Methods
-			/// <summary>
-			/// Retrieve stream at top of stack
-			/// </summary>
-			public Stream GetStream()
-			{
-				return streams.Count > 0 ? streams.Peek() : null;
-			}
-			/// <summary>
-			/// Add stream to top of stack
-			/// </summary>
-			internal void PushStream(Stream stream)
-			{
-				streams.Push(stream);
-			}
-			#endregion
-		}
-		#endregion
 	}
 
 	public static class PgpObjectFactoryExtensions
@@ -291,7 +349,7 @@ namespace fiQ.Task.Utilities
 		/// Retrieve cleartext literal packet data read from PgpObjectFactory (created from PgpEncryptedData
 		/// combined with PgpPrivateKey) and write payload asynchronously into destination stream
 		/// </summary>
-		public static async System.Threading.Tasks.Task WriteClearData(this PgpObjectFactory factory, Stream cleardest)
+		public static async Task WriteClearData(this PgpObjectFactory factory, Stream cleardest)
 		{
 			// Extract first PGP object from factory:
 			var message = factory.NextPgpObject();

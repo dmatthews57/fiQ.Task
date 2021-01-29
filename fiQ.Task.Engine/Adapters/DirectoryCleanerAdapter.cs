@@ -5,12 +5,11 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	public class DirectoryCleanerAdapter : TaskAdapter
 	{
@@ -30,7 +29,7 @@ namespace fiQ.Task.Adapters
 			{
 				#region Retrieve task parameters
 				// Retrieve and validate required parameters first:
-				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.REGEX_DIRPATH, DateTime.Now);
+				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, DateTime.Now);
 				string filenameFilter = parameters.GetString("FilenameFilter");
 				var maxAge = parameters.Get<TimeSpan>("maxAge", TimeSpan.TryParse);
 				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter) || maxAge == null)
@@ -50,7 +49,7 @@ namespace fiQ.Task.Adapters
 				string archiveFolder = parameters.GetString("ArchiveFolder");
 				if (!string.IsNullOrEmpty(archiveFolder))
 				{
-					if (!TaskUtilities.REGEX_DIRPATH.IsMatch(archiveFolder))
+					if (!TaskUtilities.General.REGEX_DIRPATH.IsMatch(archiveFolder))
 					{
 						throw new ArgumentException("Invalid ArchiveFolder specified");
 					}
@@ -67,7 +66,7 @@ namespace fiQ.Task.Adapters
 
 				// Create regex object from custom string, if provided (and from file filter, otherwise - this
 				// check is performed to avoid false-positives on 8.3 version of filenames):
-				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.RegexFromFileFilter(filenameFilter)
+				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.General.RegexFromFileFilter(filenameFilter)
 					: new Regex(filenameRegex, RegexOptions.IgnoreCase);
 				#endregion
 
@@ -94,7 +93,7 @@ namespace fiQ.Task.Adapters
 							}
 
 							// Apply date/time values to archive folder name, ensure resulting folder exists:
-							string archiveFilePath = TaskUtilities.ApplyDateMacros(archiveFolder, file.LastWriteTime);
+							string archiveFilePath = TaskUtilities.General.ApplyDateMacros(archiveFolder, file.LastWriteTime);
 							if (!Directory.Exists(archiveFilePath))
 							{
 								Directory.CreateDirectory(archiveFilePath);
@@ -109,7 +108,7 @@ namespace fiQ.Task.Adapters
 							else
 							{
 								archiveFilePath = Path.Combine(archiveFilePath,
-									$"{Regex.Replace(Path.GetFileNameWithoutExtension(file.FileName), archiveRenameRegex, TaskUtilities.ApplyDateMacros(archiveRenameReplacement, file.LastWriteTime))}.zip");
+									$"{Regex.Replace(Path.GetFileNameWithoutExtension(file.FileName), archiveRenameRegex, TaskUtilities.General.ApplyDateMacros(archiveRenameReplacement, file.LastWriteTime))}.zip");
 							}
 
 							// Open/create resulting zip archive:
@@ -122,7 +121,7 @@ namespace fiQ.Task.Adapters
 									.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
 								if (!string.IsNullOrEmpty(archiveSubfolder))
 								{
-									relativePath = Path.Combine(TaskUtilities.ApplyDateMacros(archiveSubfolder, file.LastWriteTime), relativePath);
+									relativePath = Path.Combine(TaskUtilities.General.ApplyDateMacros(archiveSubfolder, file.LastWriteTime), relativePath);
 								}
 
 								// Check whether this path already exists within this zip archive:

@@ -4,12 +4,11 @@ using System.Data.SqlClient;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	/// <summary>
 	/// TaskAdapter to execute a specific SQL stored procedure
@@ -126,7 +125,7 @@ namespace fiQ.Task.Adapters
 			{
 				if (ex is AggregateException ae) // Exception caught from async task; simplify if possible
 				{
-					ex = TaskUtilities.SimplifyAggregateException(ae);
+					ex = TaskUtilities.General.SimplifyAggregateException(ae);
 				}
 				logger.LogError(ex, "Procedure execution failed");
 				result.AddException(ex);

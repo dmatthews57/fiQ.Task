@@ -4,14 +4,12 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using fiQ.Task.Engine;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 
-namespace fiQ.Task.Cmd
+namespace fiQ.TaskCmd
 {
 	class Program
 	{
@@ -57,7 +55,7 @@ namespace fiQ.Task.Cmd
 					var match = REGEX_TASKPARM.Match(arg);
 					if (match.Success)
 					{
-						cmdlineTaskParameters[$"Parameters:{match.Groups["name"].Value}"]  = match.Groups["value"].Value;
+						cmdlineTaskParameters[$"Parameters:{match.Groups["name"].Value}"] = match.Groups["value"].Value;
 					}
 					else
 					{
@@ -144,8 +142,8 @@ namespace fiQ.Task.Cmd
 			var serviceCollection = new ServiceCollection()
 				.AddLogging(configure => configure.AddSerilog())
 				.AddSingleton<IConfiguration>(config)
-				.Configure<SmtpOptions>(config.GetSection("Smtp"))
-				.AddTransient<SmtpUtilities>()
+				.Configure<TaskUtilities.Smtp>(config.GetSection("Smtp"))
+				.AddTransient<TaskUtilities.Smtp>()
 				.AddSingleton(x => ActivatorUtilities.CreateInstance<TaskEngine>(x, jobName))
 			;
 
@@ -254,7 +252,7 @@ namespace fiQ.Task.Cmd
 					config["senderror"] : config["sendresult"];
 				if (!string.IsNullOrEmpty(sendresultsto))
 				{
-					using (var smtp = serviceProvider.GetService<SmtpUtilities>())
+					using (var smtp = serviceProvider.GetService<TaskUtilities.Smtp>())
 					{
 						smtp.SendEmail($"Execution {(Environment.ExitCode == 0 ? "results" : "ERROR")} job [{jobName}] on {Environment.MachineName}",
 							$"Return code {Environment.ExitCode} at {DateTime.Now:yyyy-MM-dd HH:mm:ss}<br/><br/><pre>{logMessage}</pre>",

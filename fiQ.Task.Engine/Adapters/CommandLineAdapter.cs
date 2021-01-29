@@ -6,12 +6,11 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	/// <summary>
 	/// TaskAdapter to execute another program via command line
@@ -24,7 +23,7 @@ namespace fiQ.Task.Adapters
 		#endregion
 
 		/// <summary>
-		/// Execute ...
+		/// TODO: DESCRIPTION
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
@@ -42,7 +41,7 @@ namespace fiQ.Task.Adapters
 				}
 
 				// Retrieve optional parameters
-				string workingFolder = parameters.GetString("WorkingFolder", TaskUtilities.REGEX_DIRPATH, dateTimeNow);
+				string workingFolder = parameters.GetString("WorkingFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
 				string returnValueRegex = parameters.GetString("ReturnValueRegex");
 				#endregion
 
@@ -153,7 +152,7 @@ namespace fiQ.Task.Adapters
 				}
 				catch (AggregateException ae) // Catches asynchronous exceptions only
 				{
-					throw TaskUtilities.SimplifyAggregateException(ae);
+					throw TaskUtilities.General.SimplifyAggregateException(ae);
 				}
 				#endregion
 			}

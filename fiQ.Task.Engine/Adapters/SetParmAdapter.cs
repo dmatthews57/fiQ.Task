@@ -1,10 +1,10 @@
 ﻿using System;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	/// <summary>
 	/// TaskAdapter to set parameters for use by subsequent TaskAdapters in batch

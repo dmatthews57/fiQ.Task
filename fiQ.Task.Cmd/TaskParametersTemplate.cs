@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 
-namespace fiQ.Task.Cmd
+namespace fiQ.TaskCmd
 {
 	/// <summary>
 	/// Intermediate class for reading a TaskParameters object from a configuration file

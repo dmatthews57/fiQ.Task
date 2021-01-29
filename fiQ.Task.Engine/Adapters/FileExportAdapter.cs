@@ -8,27 +8,32 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	public class FileExportAdapter : TaskAdapter
 	{
 		#region Fields and constructors
 		private string exportProcedureName = null;		// Stored procedure for actual data export
-		private int? exportProcedureTimeout = null;     // Optional timeout (in seconds) for each export procedure call
+		private int? exportProcedureTimeout = null;		// Optional timeout (in seconds) for each export procedure call
+		private string exportPGPPublicKeyRing = null;	// If present, data output will be PGP-encrypted with a key from the specified ring
+		private string exportPGPUserID = null;          // If using PGP public keyring, specifies UserID for key to be used from ring (if not specified, first available key will be used)
+		private bool exportPGPRawFormat = false;		// If using PGP encryption, specifies raw format (default is ASCII-armored)
 		private bool defaultNulls = false;				// If true, explicit DBNull value will be passed to all unrecognized stored procedure inputs
 		private bool suppressIfEmpty = false;			// If true, files with no content will not be produced (and empty datasets will not generate errors)
-		private bool suppressHeaders = false;           // If true, output files will not include CSV headers
+		private bool ignoreUnexpectedTables = false;	// If true, unexpected result sets (i.e. additional result sets beyond list of export filenames) will be ignored
+		private bool suppressHeaders = false;			// If true, output files will not include CSV headers
+		private bool qualifyStrings = false;			// If true, all string outputs will be qualified (wrapped in quotes)
 		private string delimiter = null;				// Used when outputting multiple columns (default comma)
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		private OutputColumnTemplateListSet outputColumnListSet = null;
 
-		private static Regex quoteregex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
 		private static Regex stringFormatRegex = new Regex(@"^[^{]*{0(,-?\d+)?(:.+)?}[^{]*$"); // string.Format style with single argument and optional formatting
+		private static Regex qualifiedStringRegex = new Regex("^\".*\"$"); // String is already wrapped in double-quotes
+		private static Regex quoteEscapeRegex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
 
 		public FileExportAdapter(IConfiguration _config, ILogger<FileExportAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
@@ -46,7 +51,7 @@ namespace fiQ.Task.Adapters
 				#region Retrieve task parameters
 				string connectionString = config.GetConnectionString(parameters.GetString("ConnectionString"));
 				exportProcedureName = parameters.GetString("ExportProcedureName");
-				string exportFolder = parameters.GetString("ExportFolder", TaskUtilities.REGEX_DIRPATH, dateTimeNow);
+				string exportFolder = parameters.GetString("ExportFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
 				if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(exportProcedureName) || string.IsNullOrEmpty(exportFolder))
 				{
 					throw new ArgumentException("Missing or invalid ConnectionString, ExportProcedureName and/or ExportFolder");
@@ -64,10 +69,15 @@ namespace fiQ.Task.Adapters
 
 				// Retrieve other optional parameters:
 				exportProcedureTimeout = parameters.Get<int>("ExportProcedureTimeout", int.TryParse);
+				exportPGPPublicKeyRing = parameters.GetString("ExportPGPPublicKeyRing");
+				exportPGPUserID = parameters.GetString("ExportPGPUserID");
+				exportPGPRawFormat = parameters.GetBool("ExportPGPRawFormat");
 				bool haltOnExportError = parameters.GetBool("HaltOnExportError");
 				defaultNulls = parameters.GetBool("DefaultNulls");
 				suppressIfEmpty = parameters.GetBool("SuppressIfEmpty");
+				ignoreUnexpectedTables = parameters.GetBool("IgnoreUnexpectedTables");
 				suppressHeaders = parameters.GetBool("SuppressHeaders");
+				qualifyStrings = parameters.GetBool("QualifyStrings");
 				delimiter = parameters.GetString("Delimiter");
 				if (string.IsNullOrEmpty(delimiter))
 				{
@@ -199,7 +209,7 @@ namespace fiQ.Task.Adapters
 						{
 							if (ex is AggregateException ae) // Exception caught from async task; simplify if possible
 							{
-								ex = TaskUtilities.SimplifyAggregateException(ae);
+								ex = TaskUtilities.General.SimplifyAggregateException(ae);
 							}
 
 							// Log error here (to take advantage of logger scope context) and add exception to result collection:
@@ -237,9 +247,9 @@ namespace fiQ.Task.Adapters
 			{
 				if (ex is AggregateException ae) // Exception caught from async task; simplify if possible
 				{
-					ex = TaskUtilities.SimplifyAggregateException(ae);
+					ex = TaskUtilities.General.SimplifyAggregateException(ae);
 				}
-				logger.LogError(ex, "File export failed");
+				logger.LogError(ex, "Export process failed");
 				result.AddException(ex);
 			}
 			return result;
@@ -410,11 +420,11 @@ namespace fiQ.Task.Adapters
 			// Build collection of export filenames from filename string selected above:
 			var exportFilenames = string.IsNullOrEmpty(exportFilename) ? new Queue<string>() : new Queue<string>(exportFilename.Split(';'));
 
-			#region Iterate through all datatables in dataset, creating and writing contents to files
+			#region Iterate through all datatables in dataset, writing contents to files
 			for (int tblidx = 0; tblidx < dataSet.Tables.Count; ++tblidx)
 			{
 				// Retrieve next available filename from queue (if any available):
-				var filename = exportFilenames.Count > 0 ? exportFilenames.Dequeue() : null;
+				var filename = exportFilenames.Count > 0 ? exportFilenames.Dequeue().Trim() : null;
 
 				// If there are no rows in this table and we are suppressing empty datatables, continue to next
 				// table (doesn't matter whether we have a valid filename or not in this case)
@@ -422,10 +432,18 @@ namespace fiQ.Task.Adapters
 				{
 					logger.LogInformation($"File [{filename ?? "(null)"}] not produced ({dataSet.Tables[tblidx].TableName} is empty, suppressed)");
 				}
-				// If filename is NULL (as opposed to blank), we have more datatables than filenames - throw exception:
+				// If filename is NULL (as opposed to blank), we have more datatables than filenames - throw exception
+				// unless we have already exported at least one datatable and are ignoring unexpected tables:
 				else if (filename == null)
 				{
-					throw new Exception($"Unable to export {dataSet.Tables[tblidx].TableName} (no filename available)");
+					if (tblidx > 0 && ignoreUnexpectedTables)
+					{
+						logger.LogInformation($"Discarded {dataSet.Tables[tblidx].Rows.Count} row(s) from {dataSet.Tables[tblidx].TableName} (unexpected, no filename)");
+					}
+					else
+					{
+						throw new Exception($"Unable to export {dataSet.Tables[tblidx].TableName} (no filename available)");
+					}
 				}
 				// If filename is provided but blank, we are discarding this datatable:
 				else if (string.IsNullOrEmpty(filename))
@@ -494,45 +512,40 @@ namespace fiQ.Task.Adapters
 						#endregion
 					}
 
-					logger.LogDebug($"Exporting {dataSet.Tables[tblidx].Rows.Count} rows from {dataSet.Tables[tblidx].TableName} to {exportFilePath}");
-
-					#region Open destination file, write file header (if required) followed by detail records
-					int rowidx = -1, colidx = -1;
+					#region Create file and write table contents
 					try
 					{
-						using var filestream = new FileStream(exportFilePath, FileMode.Create, FileAccess.Write, FileShare.None); // TODO: SUPPORT PGP?
-						using var streamwriter = new StreamWriter(filestream);
-						if (!suppressHeaders)
+						if (string.IsNullOrEmpty(exportPGPPublicKeyRing))
 						{
-							for (colidx = 0; colidx < boundColumns.Count; ++colidx)
-							{
-								if (colidx > 0) await streamwriter.WriteAsync(delimiter);
-								await streamwriter.WriteAsync(boundColumns[colidx].ColumnName.Replace(delimiter, string.Empty));
-							}
-							await streamwriter.WriteLineAsync();
+							// Open destination file and streamwriter, write table contents
+							using var filestream = new FileStream(exportFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+							using var streamwriter = new StreamWriter(filestream);
+							await WriteTable(streamwriter, dataSet.Tables[tblidx], boundColumns);
 						}
-						for (rowidx = 0; rowidx < dataSet.Tables[tblidx].Rows.Count; ++rowidx)
+						else
 						{
-							for (colidx = 0; colidx < boundColumns.Count; ++colidx)
+							// PGP encryption required - open key file first (if this fails, we don't want to create output file):
+							using var publickeystream = new FileStream(exportPGPPublicKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
+							// Open output file (automatically adding pgp extension, if required):
+							if (!Path.GetExtension(exportFilePath).Equals("pgp", StringComparison.OrdinalIgnoreCase))
 							{
-								if (colidx > 0) await streamwriter.WriteAsync(delimiter);
-								await streamwriter.WriteAsync(boundColumns[colidx].OutputValue(dataSet.Tables[tblidx].Rows[rowidx]));
+								exportFilePath += ".pgp";
 							}
-							await streamwriter.WriteLineAsync();
+							using var filestream = new FileStream(exportFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+							// Create encryption stream around output file, then StreamWriter around top stream in encryption stack:
+							using var encryptionstream = exportPGPRawFormat ? TaskUtilities.Pgp.GetEncryptionStreamRaw(publickeystream, exportPGPUserID, filestream)
+								: TaskUtilities.Pgp.GetEncryptionStream(publickeystream, exportPGPUserID, filestream);
+							using var streamwriter = new StreamWriter(encryptionstream.GetStream());
+
+							// Write file contents (StreamWriter will write through encryption stream stack to output file stream):
+							await WriteTable(streamwriter, dataSet.Tables[tblidx], boundColumns);
 						}
 					}
 					catch (Exception ex)
 					{
-						var exmessage = new StringBuilder("Exception writing ")
-							.Append(dataSet.Tables[tblidx].TableName)
-							.Append(" to ")
-							.Append(exportFilePath);
-						if (colidx >= 0)
-						{
-							if (rowidx >= 0) exmessage.AppendFormat(" at row {0} column {1}", rowidx, colidx);
-							else exmessage.AppendFormat(" at header row column {0}", colidx);
-						}
-						throw new Exception(exmessage.ToString(), ex is AggregateException ae ? TaskUtilities.SimplifyAggregateException(ae) : ex);
+						throw new Exception($"Error writing {dataSet.Tables[tblidx].TableName} to {exportFilePath}",
+							ex is AggregateException ae ? TaskUtilities.General.SimplifyAggregateException(ae) : ex);
 					}
 					#endregion
 
@@ -554,15 +567,119 @@ namespace fiQ.Task.Adapters
 			// Return output collection from export procedure, to be added to task return values:
 			return outputParameters;
 		}
+
+		/// <summary>
+		/// Perform actual writing of file contents, given DataTable and list of bound output columns
+		/// </summary>
+		private async Task WriteTable(StreamWriter streamwriter, DataTable datatable, List<OutputColumnBound> boundColumns)
+		{
+			int rowidx = -1, colidx = -1;
+			try
+			{
+				// Write header row, if required:
+				if (!suppressHeaders)
+				{
+					for (colidx = 0; colidx < boundColumns.Count; ++colidx)
+					{
+						if (colidx > 0) await streamwriter.WriteAsync(delimiter);
+						await streamwriter.WriteAsync(boundColumns[colidx].ColumnName.Replace(delimiter, string.Empty));
+					}
+					await streamwriter.WriteLineAsync();
+				}
+
+				// Write all data rows:
+				for (rowidx = 0; rowidx < datatable.Rows.Count; ++rowidx)
+				{
+					for (colidx = 0; colidx < boundColumns.Count; ++colidx)
+					{
+						if (colidx > 0) await streamwriter.WriteAsync(delimiter);
+						await streamwriter.WriteAsync(ColumnValueToString(datatable.Rows[rowidx][boundColumns[colidx].Ordinal], boundColumns[colidx]));
+					}
+					await streamwriter.WriteLineAsync();
+				}
+			}
+			catch (Exception ex)
+			{
+				throw new Exception(rowidx >= 0 ? $"Exception at row {rowidx} column {colidx}" : $"Exception at header row column {colidx}",
+					ex is AggregateException ae ? TaskUtilities.General.SimplifyAggregateException(ae) : ex);
+			}
+		}
+
+		/// <summary>
+		/// Convert column value object (from DataRow) into string, using formatting specified by bound output column
+		/// </summary>
+		private string ColumnValueToString(object value, OutputColumnBound column)
+		{
+			if (value is byte[] byteval)
+			{
+				// Special handling required for binary/varbinary fields - convert to hex first:
+				var converted = BitConverter.ToString(byteval).Replace("-", string.Empty);
+				return column.FormatMethod switch
+				{
+					Format.Explicit => string.Format(column.FormatString, converted),
+					Format.Auto => "0x" + converted,
+					_ => converted
+				};
+			}
+			else if (column.FormatMethod == Format.Explicit)
+			{
+				// Let string.Format handle any type-specific logic, but then check whether delimiter is present
+				// in result (for example, DateTime formats may inadvertently introduce commas):
+				var strval = string.Format(column.FormatString, value);
+				if (strval.Contains(delimiter))
+				{
+					// If string was already qualified by FormatString, we do not need to take further action;
+					// if it was not, we will need to either qualify or remove all delimiter instances:
+					if (!qualifiedStringRegex.IsMatch(strval))
+					{
+						return qualifyStrings ? "\"" + quoteEscapeRegex.Replace(strval, "\"\"") + "\""
+							: strval.Replace(delimiter, string.Empty);
+					}
+				}
+				return strval;
+			}
+			else if (column.FormatMethod == Format.Raw)
+			{
+				// No formatting required, convert directly to string - note this will not check whether
+				// delimiters are present in string, Raw format means trust exactly what comes from database
+				return value is string strval ? strval : value.ToString();
+			}
+
+			// (Note from this point onward, FormatMethod is assumed to be Auto)
+
+			else if (column.ProviderType == typeof(SqlMoney) && value is decimal decval) // Format SqlMoney fields as currency
+			{
+				return decval.ToString("C");
+			}
+			else if (value is string strval) // Special handling for string values
+			{
+				if (qualifiedStringRegex.IsMatch(strval)) // If string is already qualified, trust source value:
+				{
+					return strval;
+				}
+				else if (qualifyStrings) // Wrap string in double-quotes (any existing quotes must be escaped)
+				{
+					return "\"" + quoteEscapeRegex.Replace(strval, "\"\"") + "\"";
+				}
+				else // Output string as-is (any instances of delimiter will be removed)
+				{
+					return strval.Replace(delimiter, string.Empty);
+				}
+			}
+			else // Default case - no formatting required, just convert to string directly:
+			{
+				return value.ToString();
+			}
+		}
 		#endregion
 
 		#region Private class definitions - Output column control
 		public enum Format
 		{
-			Exclude,    // Exclude this column from output
-			Auto,       // Dynamically format columns into strings based on column type
-			Raw,        // Dump column values directly to file using ToString
-			Explicit    // Use string.Format(FormatString) or [cell].ToString(FormatString) to generate output
+			Exclude,	// Exclude this column from output
+			Auto,		// Dynamically format columns into strings based on column type
+			Raw,		// Dump column values directly to file using ToString
+			Explicit	// Use string.Format(FormatString) or [cell].ToString(FormatString) to generate output
 		};
 
 		/// <summary>
@@ -690,8 +807,8 @@ namespace fiQ.Task.Adapters
 		}
 
 		/// <summary>
-		/// Container class for explicit output behavior of the column at the specified Ordinal (built from
-		/// metadata of actual result set, combined with OutputColumnTemplate if present)
+		/// Container class for explicit output behavior of the column at the specified Ordinal (built
+		/// from metadata of actual result set, combined with OutputColumnTemplate if present)
 		/// </summary>
 		private class OutputColumnBound
 		{
@@ -702,46 +819,6 @@ namespace fiQ.Task.Adapters
 			public Type ProviderType { get; init; }
 			public Format FormatMethod { get; init; }
 			public string FormatString { get; init; }
-			#endregion
-
-			#region Methods
-			public string OutputValue(DataRow row)
-			{
-				if (row[Ordinal] is byte[] byteval)
-				{
-					// Special handling required for binary/varbinary fields - convert to hex first:
-					var converted = BitConverter.ToString(byteval).Replace("-", string.Empty);
-					return FormatMethod switch
-					{
-						Format.Explicit => string.Format(FormatString, converted),
-						Format.Auto => "0x" + converted,
-						_ => converted
-					};
-				}
-				else if (FormatMethod == Format.Explicit) // Let string.Format handle any type-specific logic
-				{
-					return string.Format(FormatString, row[Ordinal]);
-				}
-				else if (FormatMethod == Format.Raw) // No formatting required, convert directly to string
-				{
-					return row[Ordinal].ToString();
-				}
-
-				// (Note from this point onward, FormatMethod is assumed to be Auto)
-
-				else if (ProviderType == typeof(SqlMoney) && row[Ordinal] is decimal decval) // Format SqlMoney fields as currency
-				{
-					return decval.ToString("C");
-				}
-				else if (row[Ordinal] is string strval)
-				{
-					return strval; // TODO: FORMATTING, ETC
-				}
-				else // Default case - no formatting required, just convert to string directly:
-				{
-					return row[Ordinal].ToString();
-				}
-			}
 			#endregion
 		}
 		#endregion

@@ -3,12 +3,11 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using fiQ.Task.Models;
-using fiQ.Task.Utilities;
+using fiQ.TaskModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace fiQ.Task.Adapters
+namespace fiQ.TaskAdapters
 {
 	/// <summary>
 	/// TaskAdapter to check for presence of file(s) matching a specified pattern
@@ -32,7 +31,7 @@ namespace fiQ.Task.Adapters
 			try
 			{
 				#region Retrieve task parameters
-				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.REGEX_DIRPATH, DateTime.Now);
+				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, DateTime.Now);
 				string filenameFilter = parameters.GetString("FilenameFilter");
 				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter))
 				{
@@ -43,7 +42,7 @@ namespace fiQ.Task.Adapters
 
 				// Create regex object from custom string, if provided (and from file filter, otherwise - this
 				// check is performed to avoid false-positives on 8.3 version of filenames):
-				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.RegexFromFileFilter(filenameFilter)
+				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.General.RegexFromFileFilter(filenameFilter)
 					: new Regex(filenameRegex, RegexOptions.IgnoreCase);
 				#endregion
 

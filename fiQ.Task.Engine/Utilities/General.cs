@@ -3,9 +3,9 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace fiQ.Task.Utilities
+namespace fiQ.TaskUtilities
 {
-	public static class TaskUtilities
+	public static class General
 	{
 		#region Public fields
 		public static readonly Regex REGEX_DATE_MACRO = new Regex(@"<U?(yy|MM|dd|HH|hh|H|h|mm|ss)+([[][+-]\d*[yMdHhms][]])*>");

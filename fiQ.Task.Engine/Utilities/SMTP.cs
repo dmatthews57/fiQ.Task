@@ -4,7 +4,7 @@ using System.Net.Mail;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace fiQ.Task.Utilities
+namespace fiQ.TaskUtilities
 {
 	/// <summary>
 	/// Utility class for wrapping SMTP client and performing simple outbound email sending
@@ -12,7 +12,7 @@ namespace fiQ.Task.Utilities
 	/// <remarks>
 	/// Requires an SmtpOptions configuration and logger having been registered in ServiceCollection
 	/// </remarks>
-	public class SmtpUtilities : IDisposable
+	public class Smtp : IDisposable
 	{
 		#region Fields and constructors
 		private readonly SmtpOptions options;
@@ -20,7 +20,7 @@ namespace fiQ.Task.Utilities
 		private bool disposed = false;
 		private SmtpClient smtpClient = null;
 
-		public SmtpUtilities(IOptions<SmtpOptions> _options, ILogger<SmtpUtilities> _logger)
+		public Smtp(IOptions<SmtpOptions> _options, ILogger<Smtp> _logger)
 		{
 			options = _options?.Value;
 			logger = _logger;

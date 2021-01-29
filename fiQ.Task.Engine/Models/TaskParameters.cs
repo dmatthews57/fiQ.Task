@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Text.RegularExpressions;
-using fiQ.Task.Utilities;
 using Microsoft.Extensions.Configuration;
 
-namespace fiQ.Task.Models
+namespace fiQ.TaskModels
 {
 	/// <summary>
 	/// Container class for configuring a specific TaskAdapter and set of execution parameters
@@ -70,7 +68,7 @@ namespace fiQ.Task.Models
 		{
 			if (parameters.ContainsKey(name))
 			{
-				string value = applyMacroTime == null ? parameters[name] : TaskUtilities.ApplyDateMacros(parameters[name], (DateTime)applyMacroTime);
+				string value = applyMacroTime == null ? parameters[name] : TaskUtilities.General.ApplyDateMacros(parameters[name], (DateTime)applyMacroTime);
 				return (parmRegex == null) ? value : (parmRegex.IsMatch(value) ? value : null);
 			}
 			return string.Empty;
