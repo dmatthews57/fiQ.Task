@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using fiQ.TaskModels;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +18,8 @@ namespace fiQ.TaskAdapters
 	public class FileExportAdapter : TaskAdapter
 	{
 		#region Fields and constructors
+		private IMemoryCache memorycache;	// Injected by constructor, used to cache SQL stored procedure parameters
+
 		private string exportProcedureName = null;		// Stored procedure for actual data export
 		private int? exportProcedureTimeout = null;		// Optional timeout (in seconds) for each export procedure call
 		private string exportPGPPublicKeyRing = null;	// If present, data output will be PGP-encrypted with a key from the specified ring
@@ -27,7 +30,7 @@ namespace fiQ.TaskAdapters
 		private bool ignoreUnexpectedTables = false;	// If true, unexpected result sets (i.e. additional result sets beyond list of export filenames) will be ignored
 		private bool suppressHeaders = false;			// If true, output files will not include CSV headers
 		private bool qualifyStrings = false;			// If true, all string outputs will be qualified (wrapped in quotes)
-		private string delimiter = null;				// Used when outputting multiple columns (default comma)
+		private string delimiter = null;                // Used when outputting multiple columns (default comma)
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		private OutputColumnTemplateListSet outputColumnListSet = null;
 
@@ -35,12 +38,19 @@ namespace fiQ.TaskAdapters
 		private static Regex qualifiedStringRegex = new Regex("^\".*\"$"); // String is already wrapped in double-quotes
 		private static Regex quoteEscapeRegex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
 
-		public FileExportAdapter(IConfiguration _config, ILogger<FileExportAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) { }
+		public FileExportAdapter(IConfiguration _config,
+			ILogger<FileExportAdapter> _logger,
+			IMemoryCache _memorycache,
+			string taskName = null)
+			: base(_config, _logger, taskName)
+		{
+			memorycache = _memorycache;
+		}
 		#endregion
 
 		/// <summary>
-		/// TODO: DESCRIPTION
+		/// Use the specified database connection string and stored procedure to export data to files (optionally
+		/// retrieving a queue of files to be exported, performing multiple exports in order)
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
@@ -72,7 +82,6 @@ namespace fiQ.TaskAdapters
 				exportPGPPublicKeyRing = parameters.GetString("ExportPGPPublicKeyRing");
 				exportPGPUserID = parameters.GetString("ExportPGPUserID");
 				exportPGPRawFormat = parameters.GetBool("ExportPGPRawFormat");
-				bool haltOnExportError = parameters.GetBool("HaltOnExportError");
 				defaultNulls = parameters.GetBool("DefaultNulls");
 				suppressIfEmpty = parameters.GetBool("SuppressIfEmpty");
 				ignoreUnexpectedTables = parameters.GetBool("IgnoreUnexpectedTables");
@@ -83,6 +92,7 @@ namespace fiQ.TaskAdapters
 				{
 					delimiter = ",";
 				}
+				bool haltOnExportError = parameters.GetBool("HaltOnExportError");
 
 				// Retrieve default destination filename (if present, will override database-provided value):
 				string exportFilename = parameters.GetString("ExportFilename", null, dateTimeNow);
@@ -170,7 +180,7 @@ namespace fiQ.TaskAdapters
 							// then throw custom exception to indicate to outer try block that it can just exit without re-logging
 							logger.LogError(ex, "Queue check failed");
 							result.AddException(new Exception($"Queue check procedure {queueProcedureName} failed", ex));
-							throw new AlreadyHandledException();
+							throw new TaskExitException();
 						}
 						finally
 						{
@@ -220,7 +230,7 @@ namespace fiQ.TaskAdapters
 							// to outer try block that it can just exit without re-logging:
 							if (haltOnExportError)
 							{
-								throw new AlreadyHandledException();
+								throw new TaskExitException();
 							}
 						}
 						finally
@@ -239,7 +249,7 @@ namespace fiQ.TaskAdapters
 					result.Success = true;
 				}
 			}
-			catch (AlreadyHandledException)
+			catch (TaskExitException)
 			{
 				// Exception was handled above - just proceed with return below
 			}
@@ -261,7 +271,28 @@ namespace fiQ.TaskAdapters
 		/// </summary>
 		private void DeriveAndBindParameters(SqlCommand cmd)
 		{
-			SqlCommandBuilder.DeriveParameters(cmd); // Note: synchronous (no async version available)
+			// Create cache key from database connection string (hashed, to avoid saving passwords/etc in collection) and stored
+			// proc name, check whether parameters have already been derived for this object within current run:
+			string cachekey = $"{cmd.Connection.ConnectionString.GetHashCode()}::{cmd.CommandText}";
+			if (memorycache.TryGetValue<SqlParameter[]>(cachekey, out var cachedparms))
+			{
+				// Cached parameters available - clone cached array into destination parameter collection:
+				cmd.Parameters.AddRange(cachedparms.Select(x => ((ICloneable)x).Clone()).Cast<SqlParameter>().ToArray());
+			}
+			else
+			{
+				// No cached parameters available; derive from server (note this is synchronous, no async version available):
+				SqlCommandBuilder.DeriveParameters(cmd);
+
+				// Clone parameter collection into cache (with 5 minute TTL) for subsequent calls to this same proc:
+				memorycache.Set(
+					cachekey,
+					cmd.Parameters.Cast<SqlParameter>().Select(x => ((ICloneable)x).Clone()).Cast<SqlParameter>().ToArray(),
+					new MemoryCacheEntryOptions().SetAbsoluteExpiration(TimeSpan.FromMinutes(5))
+				);
+			}
+
+			#region Iterate through parameter collection, applying values from member collection
 			foreach (SqlParameter sqlParameter in cmd.Parameters)
 			{
 				if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
@@ -299,6 +330,7 @@ namespace fiQ.TaskAdapters
 					// value, execution will fail and missing parameter will be indicated by exception string)
 				}
 			}
+			#endregion
 		}
 
 		/// <summary>
@@ -837,25 +869,6 @@ namespace fiQ.TaskAdapters
 			/// Optional Subfolder (under configured destination folder) for file output
 			/// </summary>
 			public string Subfolder { get; init; } = null;
-		}
-
-		/// <summary>
-		/// Custom exception class to indicate to ExecuteTask that it can immediately exit function without
-		/// needing to execute any further handler logic (logging, adding to result collection, etc.)
-		/// </summary>
-		private class AlreadyHandledException : Exception
-		{
-			public AlreadyHandledException()
-			{
-			}
-			public AlreadyHandledException(string message)
-				: base(message)
-			{
-			}
-			public AlreadyHandledException(string message, Exception inner)
-				: base(message, inner)
-			{
-			}
 		}
 		#endregion
 	}

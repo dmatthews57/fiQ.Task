@@ -18,6 +18,8 @@ namespace fiQ.TaskAdapters
 	public class CommandLineAdapter : TaskAdapter
 	{
 		#region Fields and constructors
+		private static readonly Regex argumentKeyRegex = new Regex(@"^Argument\d$", RegexOptions.IgnoreCase);
+
 		public CommandLineAdapter(IConfiguration _config, ILogger<CommandLineAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
 		#endregion
@@ -57,40 +59,35 @@ namespace fiQ.TaskAdapters
 						var commandstring = new StringBuilder(executable);
 
 						#region Add additional command line arguments from parameter collection
-						// Supports up to 10 arguments, named as "argument0" through "argument9":
-						var argumentKeyRegex = new Regex(@"^Argument\d$", RegexOptions.IgnoreCase);
 						var argumentkeys = parameters.GetKeys()
+							// Regex supports up to 10 arguments, named as "argument0" through "argument9":
 							.Where(argumentkey => argumentKeyRegex.IsMatch(argumentkey))
 							.OrderBy(argumentkey => argumentkey);
-						if (argumentkeys.Any())
+						foreach (string argumentkey in argumentkeys)
 						{
-							// Set up regex to capture argument-named macros, to allow values passed as parameters to this adapter
-							// (including return values output by previous adapters in batch) to be placed directly into command string; for
-							// example if a previous adapter in this batch output return value "@FileID"/57, placing the parameter
-							// "Argument0"/"-FileID=<@@FileID>" in the collection for THIS adapter will result in value "-FileID=57" being
-							// placed in the command line to be executed:
-							var argumentValueMacroRegex = new Regex(@"<@(?<name>[^>]+)>");
-							foreach (string argumentkey in argumentkeys)
+							// First retrieve the specific argument by key name, processing date macros:
+							string argumentvalue = parameters.GetString(argumentkey, null, dateTimeNow);
+
+							// Now process any nested macros in resulting argument value string - regex will capture argument-named macros,
+							// to allow values passed as parameters to this adapter (including return values output by previous adapters
+							// in batch) to be placed directly into command string. For example if a previous adapter in this batch output
+							// return value "@FileID"/57, placing the parameter "Argument0"/"-FileID=<@@FileID>" in the collection for
+							// THIS adapter will result in value "-FileID=57" being placed in the command line to be executed:
+							var argumentvaluemacromatches = TaskUtilities.General.REGEX_NESTEDPARM_MACRO
+								.Matches(argumentvalue)
+								.Cast<Match>()
+								// Flatten match collection into name/value pair and select unique values only:
+								.Select(match => new { Name = match.Groups["name"].Value, Value = match.Value })
+								.Distinct();
+							foreach (var match in argumentvaluemacromatches)
 							{
-								// First retrieve the specific argument by key name, processing date macros:
-								string argumentvalue = parameters.GetString(argumentkey, null, dateTimeNow);
-
-								// Now process any nested macros in resulting argument value string, flattening match collection
-								// into name/value pair and selecting unique values only:
-								var argumentvaluemacromatches = argumentValueMacroRegex.Matches(argumentvalue)
-									.OfType<Match>()
-									.Select(match => new { Name = match.Groups["name"].Value, Value = match.Value })
-									.Distinct();
-								foreach (var match in argumentvaluemacromatches)
-								{
-									// Retrieve parameter matching the "name" portion of the macro - processing date/time macros
-									// again - and replace all instances of the specified macro with the string retrieved:
-									argumentvalue = argumentvalue.Replace(match.Value, parameters.GetString(match.Name, null, dateTimeNow));
-								}
-
-								// Add final argument value to command line:
-								commandstring.Append($" {argumentvalue}");
+								// Retrieve parameter matching the "name" portion of the macro - processing date/time macros
+								// again - and replace all instances of the specified macro with the string retrieved:
+								argumentvalue = argumentvalue.Replace(match.Value, parameters.GetString(match.Name, null, dateTimeNow));
 							}
+
+							// Add final argument value to command line:
+							commandstring.Append($" {argumentvalue}");
 						}
 						#endregion
 

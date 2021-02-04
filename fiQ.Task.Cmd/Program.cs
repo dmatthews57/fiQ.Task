@@ -15,10 +15,10 @@ namespace fiQ.TaskCmd
 	{
 		static void Main(string[] args)
 		{
+			TaskEngineConfig engineConfig = new TaskEngineConfig(); // Engine execution parameter collection
 			string jobName = null; // For logging purposes
 			string taskFileName = null; // For running a single file
 			string taskFolderName = null; // For running all files in a folder
-			bool haltOnError = false; // Flag to stop running batch if error encountered
 			var cmdlineTaskParameters = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); // Global overrides for task parameters
 
 			#region Load application configuration
@@ -77,7 +77,10 @@ namespace fiQ.TaskCmd
 									configargs.Add("Serilog:MinimumLevel=Debug");
 									break;
 								case "haltonerror": // Halt batch of tasks if any individual step fails
-									haltOnError = true;
+									engineConfig.HaltOnError = true;
+									break;
+								case "debugreturn": // Dump return values at end of execution to debug log
+									engineConfig.DebugReturnValues = true;
 									break;
 								default: // Unrecognized value - add to config collection
 									configargs.Add(arg);
@@ -136,11 +139,14 @@ namespace fiQ.TaskCmd
 			// Build logger configuration from application config file and create logger:
 			Log.Logger = new LoggerConfiguration()
 				.ReadFrom.Configuration(config)
+				.Enrich.WithProperty("AppVer", typeof(Program).Assembly.GetName().Version)
+				.Enrich.WithProperty("LibVer", typeof(TaskEngine).Assembly.GetName().Version)
 				.CreateLogger();
 
 			// Set up services and configurations for dependency injection:
 			var serviceCollection = new ServiceCollection()
-				.AddLogging(configure => configure.AddSerilog())
+				.AddLogging(configure => configure.AddSerilog(dispose: true))
+				.AddMemoryCache()
 				.AddSingleton<IConfiguration>(config)
 				.Configure<TaskUtilities.Smtp>(config.GetSection("Smtp"))
 				.AddTransient<TaskUtilities.Smtp>()
@@ -201,7 +207,7 @@ namespace fiQ.TaskCmd
 							{
 								// Error reading file or deserializing configuration object; if this is not part of a batch OR
 								// batch specifies halt on error, empty list and re-throw exception to stop all processing:
-								if (string.IsNullOrEmpty(taskFolderName) || haltOnError)
+								if (string.IsNullOrEmpty(taskFolderName) || engineConfig.HaltOnError)
 								{
 									adapterConfigs.Clear();
 									throw new Exception($"Error reading configuration file {configFile}", ex);
@@ -227,7 +233,7 @@ namespace fiQ.TaskCmd
 				{
 					// Activate TaskEngine service, and pass in TaskAdapter configuration collection for (synchronous) execution:
 					using var te = serviceProvider.GetRequiredService<TaskEngine>();
-					var result = te.Execute(adapterConfigs, haltOnError).Result;
+					var result = te.Execute(adapterConfigs, engineConfig).Result;
 
 					// Set executable exit code to execution return value, save log message for use below:
 					Environment.ExitCode = result.ReturnValue;

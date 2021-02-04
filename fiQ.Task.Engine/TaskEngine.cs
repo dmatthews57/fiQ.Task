@@ -51,7 +51,7 @@ namespace fiQ
 		}
 		#endregion
 
-		public async Task<TaskSetResult> Execute(List<TaskParameters> tasks, bool haltOnError)
+		public async Task<TaskSetResult> Execute(List<TaskParameters> tasks, TaskEngineConfig engineConfig)
 		{
 			var tasksetresult = new TaskSetResult();
 
@@ -67,7 +67,7 @@ namespace fiQ
 						task.MergeParameters(tasksetresult.ReturnValues);
 
 						#region Execute TaskAdapter and handle result
-							var result = await t.ExecuteTask(task);
+						var result = await t.ExecuteTask(task);
 						if (result.Success == false || result.Exceptions.Any()) // Execution failed, or succeeded with errors
 						{
 							// Generate logging data for caller:
@@ -121,10 +121,20 @@ namespace fiQ
 				}
 
 				// If this step was not successful and caller requested halting batch when error encountered, stop now:
-				if (tasksetresult.ReturnValue != 0 && haltOnError)
+				if (tasksetresult.ReturnValue != 0 && engineConfig.HaltOnError)
 				{
 					tasksetresult.LogMessage.AppendLine("Halting task list due to error executing previous step");
 					break;
+				}
+			}
+			#endregion
+
+			#region If return value debugging requested, log final set of return values
+			if (engineConfig.DebugReturnValues)
+			{
+				foreach (var returnvalue in tasksetresult.ReturnValues)
+				{
+					logger.LogDebug("RETURN VALUE {@returnvalue}", new { key = returnvalue.Key, value = returnvalue.Value });
 				}
 			}
 			#endregion
