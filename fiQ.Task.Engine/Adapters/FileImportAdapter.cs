@@ -141,7 +141,7 @@ namespace fiQ.TaskAdapters
 							using var importFileScope = logger.BeginScope(new Dictionary<string, object>() { ["FileName"] = fileInfo.FullName });
 
 							// Determine path to archive file to after completion of import process:
-							var archiveFilePath = Path.Combine(archiveFolder,
+							var archiveFilePath = Path.Combine(string.IsNullOrEmpty(archiveFolder) ? importFolder : archiveFolder,
 								rArchiveRenameRegex == null ? fileInfo.Name : rArchiveRenameRegex.Replace(fileInfo.Name, archiveRenameReplacement));
 							if (archiveFilePath.Equals(fileInfo.FullName, StringComparison.OrdinalIgnoreCase))
 							{
@@ -151,12 +151,12 @@ namespace fiQ.TaskAdapters
 
 							try
 							{
-								// Open file in read-only mode
-								using (var filestream = new FileStream(fileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.None))
+								// Create fileControlBlock to hold file information and data streams, then pass processing off to
+								// utility function, receiving any output parameters from import procedure and merging into overall
+								// task return value set:
+								using (var fileControlBlock = new FileControlBlock(fileInfo))
 								{
-									// Pass processing off to utility function, receiving any output parameters from
-									// import procedure and merging into overall task return value set:
-									result.MergeReturnValues(await ImportFile(cnn, fileInfo, filestream));
+									result.MergeReturnValues(await ImportFile(cnn, consoleOutput, fileControlBlock));
 								}
 							}
 							catch (Exception ex)
@@ -206,6 +206,9 @@ namespace fiQ.TaskAdapters
 					}
 					#endregion
 				}
+
+				// If this point is reached, consider overall operation successful
+				result.Success = true;
 			}
 			catch (TaskExitException)
 			{
@@ -225,10 +228,16 @@ namespace fiQ.TaskAdapters
 
 		#region Private methods
 		/// <summary>
-		/// Dynamically derive parameters from SQL server, and bind inputs from parameter collection
+		/// Dynamically derive parameters from SQL server, and bind inputs from parameter collection, file control block
+		/// and running collection of output parameters
 		/// </summary>
-		private void DeriveAndBindParameters(SqlCommand cmd)
+		/// <returns>
+		/// A value indicating whether structured data is present (which may require further handling)
+		/// </returns>
+		private async Task<bool> DeriveAndBindParameters(SqlCommand cmd, FileControlBlock fileControlBlock, Dictionary<string, object> outputParameters)
 		{
+			bool hasStructuredData = false;
+
 			// Create cache key from database connection string (hashed, to avoid saving passwords/etc in collection) and stored
 			// proc name, check whether parameters have already been derived for this object within current run:
 			string cachekey = $"{cmd.Connection.ConnectionString.GetHashCode()}::{cmd.CommandText}";
@@ -253,48 +262,439 @@ namespace fiQ.TaskAdapters
 			#region Iterate through parameter collection, applying values from member collection
 			foreach (SqlParameter sqlParameter in cmd.Parameters)
 			{
-				if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
+				if (sqlParameter.SqlDbType == SqlDbType.Structured)
 				{
-					// This parameter requires input value:
-					bool needsDefault = false;
+					// Flag that caller will have to handle this parameter (apply valid data or remove), and set to NULL:
+					hasStructuredData = true;
+					sqlParameter.Value = DBNull.Value;
 
-					// Check whether parameter is included in SQL parameter dictionary:
-					if (sqlParameters.ContainsKey(sqlParameter.ParameterName))
+					// Correct for a problem with DeriveParameters, which erroneously adds database name to type:
+					var typeNameParts = sqlParameter.TypeName.Split('.');
+					if (typeNameParts.Length == 3) // Database name is included in three-part format, strip out
 					{
-						// Special case - strings are not automatically changed to Guid values, attempt explicit conversion:
-						if (sqlParameter.SqlDbType == SqlDbType.UniqueIdentifier)
-						{
-							if (Guid.TryParse(sqlParameters[sqlParameter.ParameterName], out var guid))
+						sqlParameter.TypeName = $"{typeNameParts[1]}.{typeNameParts[2]}";
+					}
+				}
+				else if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
+				{
+					// Check for reserved special parameters to be supplied based on file data:
+					switch (sqlParameter.ParameterName.ToUpperInvariant())
+					{
+						case "@FILENAME":
+							sqlParameter.Value = fileControlBlock.fileInfo.Name;
+							break;
+						case "@FILEFOLDER":
+							sqlParameter.Value = fileControlBlock.fileInfo.DirectoryName;
+							break;
+						case "@FILEWRITETIMEUTC":
+							sqlParameter.Value = fileControlBlock.fileInfo.LastWriteTimeUtc;
+							break;
+						case "@FILESIZE":
+							sqlParameter.Value = fileControlBlock.fileInfo.Length;
+							break;
+						case "@FILEHASH":
+							// Create hash provider, if not already created:
+							if (md5hash == null)
 							{
-								sqlParameter.Value = guid;
+								md5hash = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+							}
+							sqlParameter.Value = await fileControlBlock.GetFileHash(md5hash) ?? DBNull.Value;
+							break;
+						case "@IMPORTSERVER":
+							sqlParameter.Value = Environment.MachineName;
+							break;
+						default: // Unreserved parameter name - supply value from parameters, if possible
+
+							// This parameter will require an input value if also an output parameter OR we are explicitly defaulting:
+							bool needsDefault = (defaultNulls || sqlParameter.Direction.HasFlag(ParameterDirection.Output));
+
+							// Check whether parameter is included in collection of output parameters from previous calls:
+							if (outputParameters.ContainsKey(sqlParameter.ParameterName))
+							{
+								// Apply value to parameter (replacing null with DBNull):
+								sqlParameter.Value = outputParameters[sqlParameter.ParameterName] ?? DBNull.Value;
 								needsDefault = false;
 							}
-						}
-						else
-						{
-							// Apply string value to parameter (replacing null with DBNull):
-							sqlParameter.Value = (object)sqlParameters[sqlParameter.ParameterName] ?? DBNull.Value;
-							needsDefault = false;
-						}
-					}
+							// Check whether parameter is included in SQL parameter dictionary:
+							else if (sqlParameters.ContainsKey(sqlParameter.ParameterName))
+							{
+								// Special case - strings are not automatically changed to Guid values, attempt explicit conversion:
+								if (sqlParameter.SqlDbType == SqlDbType.UniqueIdentifier)
+								{
+									if (Guid.TryParse(sqlParameters[sqlParameter.ParameterName], out var guid))
+									{
+										sqlParameter.Value = guid;
+										needsDefault = false;
+									}
+								}
+								else
+								{
+									// Apply string value to parameter (replacing null with DBNull):
+									sqlParameter.Value = (object)sqlParameters[sqlParameter.ParameterName] ?? DBNull.Value;
+									needsDefault = false;
+								}
+							}
 
-					// If parameter value was not set above and either we are set to supply default NULL
-					// values OR this is also an OUTPUT parameter, set to explicit NULL:
-					if (needsDefault && (defaultNulls || sqlParameter.Direction.HasFlag(ParameterDirection.Output)))
-					{
-						sqlParameter.Value = DBNull.Value;
-					}
-					// (otherwise, value will be left unspecified; if stored procedure does not provide a default
-					// value, execution will fail and missing parameter will be indicated by exception string)
+							// If we still need a default value, set to null (otherwise, any value not set above will be left
+							// unspecified; if stored procedure does not provide a default value, execution will fail and
+							// missing parameter will be indicated by exception string)
+							if (needsDefault)
+							{
+								sqlParameter.Value = DBNull.Value;
+							}
+							break;
+					};
 				}
 			}
 			#endregion
+
+			return hasStructuredData;
 		}
 
-		private async Task<Dictionary<string, string>> ImportFile(SqlConnection cnn, FileInfo fileinfo, Stream filestream)
+		/// <summary>
+		/// Call import procedure(s), passing source file data into database
+		/// </summary>
+		/// <param name="cnn">Open connection to database</param>
+		/// <param name="fileControlBlock">Object containing FileInfo and an open FileStream for source file</param>
+		/// <returns>Collection of output parameters from import procedure(s)</returns>
+		private async Task<Dictionary<string, string>> ImportFile(SqlConnection cnn, StringBuilder consoleOutput, FileControlBlock fileControlBlock)
 		{
-			Console.WriteLine($"Will import {fileinfo.FullName}");
-			throw new NotImplementedException();
+			var outputParameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+			var loggerScope = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+			if (!string.IsNullOrEmpty(importPreProcessorName))
+			{
+				#region Execute pre-processor
+				try
+				{
+					using (var cmd = new SqlCommand(importPreProcessorName, cnn) { CommandType = CommandType.StoredProcedure })
+					{
+						// Apply timeout if configured, derive and bind parameters, execute procedure:
+						if (importPreProcessorTimeout > 0) cmd.CommandTimeout = (int)importPreProcessorTimeout;
+						await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+						await cmd.ExecuteNonQueryAsync();
+
+						#region Iterate through output parameters
+						int? returnValue = null;
+						foreach (SqlParameter sqlParameter in cmd.Parameters)
+						{
+							if (sqlParameter.Direction == ParameterDirection.ReturnValue)
+							{
+								returnValue = sqlParameter.Value as int?;
+							}
+							else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+							{
+								// Check for reserved values with special behavior:
+								if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
+								{
+									if (!loggerScope.ContainsKey("FileID"))
+									{
+										// Set logging scope so subsequent logging for this block will include this value:
+										loggerScope["FileID"] = sqlParameter.Value;
+										fileControlBlock.SetLoggerScope(logger, loggerScope);
+									}
+								}
+
+								// Save value in output collection (as object, converting DBNull to null):
+								outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
+							}
+						}
+						#endregion
+
+						// Validate return code:
+						if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
+						{
+							logger.LogWarning($"Pre-processor returned non-standard value {returnValue}, proceeding with import");
+						}
+						else if (returnValue != 0) // Any other non-zero value (including null) will abort process
+						{
+							throw new Exception($"Invalid return value ({returnValue})");
+						}
+						else
+						{
+							logger.LogDebug("Pre-processor complete");
+						}
+					}
+				}
+				catch (Exception ex)
+				{
+					throw new Exception("Exception executing pre-processor", ex is AggregateException ae ? TaskUtilities.General.SimplifyAggregateException(ae) : ex);
+				}
+				finally
+				{
+					if (consoleOutput.Length > 0)
+					{
+						logger.LogDebug($"Pre-processor console output follows:\n{consoleOutput}");
+						consoleOutput.Clear();
+					}
+				}
+				#endregion
+			}
+
+			#region Execute data import
+			try
+			{
+				using (var cmd = new SqlCommand(importProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
+				{
+					// Apply timeout if configured, derive and bind parameters:
+					if (importProcedureTimeout > 0) cmd.CommandTimeout = (int)importProcedureTimeout;
+					bool hasStructuredData = await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+
+					// TODO: BIND DATA
+
+					#region Remove any parameters with NULL unstructured data
+					if (hasStructuredData)
+					{
+						// Any structured data parameters that are still set to DBNull must be removed (structured
+						// parameters can't be null, and table can't be empty):
+						var removeparms = cmd.Parameters
+							.Cast<SqlParameter>()
+							.Where(parm => parm.SqlDbType == SqlDbType.Structured && parm.Value == DBNull.Value);
+						if (removeparms.Any())
+						{
+							// Create list from enumerable (since we will be removing from collection as we go, force
+							// enumeration), then remove each entry by name (since ordinals will change)
+							var removeparmslist = removeparms.ToList();
+							foreach (var removeparm in removeparmslist)
+							{
+								cmd.Parameters.RemoveAt(removeparm.ParameterName);
+							}
+						}
+					}
+					#endregion
+
+					await cmd.ExecuteNonQueryAsync();
+
+					#region Iterate through output parameters
+					int? returnValue = null;
+					int? rowsImported = null;
+					foreach (SqlParameter sqlParameter in cmd.Parameters)
+					{
+						if (sqlParameter.Direction == ParameterDirection.ReturnValue)
+						{
+							returnValue = sqlParameter.Value as int?;
+						}
+						else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+						{
+							// Check for reserved values with special behavior:
+							if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
+							{
+								if (!loggerScope.ContainsKey("FileID"))
+								{
+									// Update logging scope so subsequent logging for this block will include this value:
+									loggerScope["FileID"] = sqlParameter.Value;
+									fileControlBlock.SetLoggerScope(logger, loggerScope);
+								}
+							}
+							else if (sqlParameter.ParameterName.Equals("@ROWSIMPORTED", StringComparison.OrdinalIgnoreCase))
+							{
+								rowsImported = sqlParameter.Value as int?;
+							}
+
+							// Save value in output collection (as object, converting DBNull to null):
+							outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
+						}
+					}
+					#endregion
+
+					// Validate return code:
+					if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
+					{
+						logger.LogWarning($"Import returned non-standard value {returnValue}, proceeding");
+					}
+					else if (returnValue != 0) // Any other non-zero value (including null) will abort process
+					{
+						throw new Exception($"Invalid return value ({returnValue})");
+					}
+					else
+					{
+						logger.LogInformation((rowsImported == null) ? "Import complete" : $"Import complete, {rowsImported} rows imported");
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				throw new Exception("Exception executing import", ex is AggregateException ae ? TaskUtilities.General.SimplifyAggregateException(ae) : ex);
+			}
+			finally
+			{
+				if (consoleOutput.Length > 0)
+				{
+					logger.LogDebug($"Import console output follows:\n{consoleOutput}");
+					consoleOutput.Clear();
+				}
+			}
+			#endregion
+
+			if (!string.IsNullOrEmpty(importPostProcessorName))
+			{
+				#region Execute post-processor
+				try
+				{
+					using (var cmd = new SqlCommand(importPostProcessorName, cnn) { CommandType = CommandType.StoredProcedure })
+					{
+						// Apply timeout if configured, derive and bind parameters, execute procedure:
+						if (importPostProcessorTimeout > 0) cmd.CommandTimeout = (int)importPostProcessorTimeout;
+						await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+						await cmd.ExecuteNonQueryAsync();
+
+						#region Iterate through output parameters
+						int? returnValue = null;
+						foreach (SqlParameter sqlParameter in cmd.Parameters)
+						{
+							if (sqlParameter.Direction == ParameterDirection.ReturnValue)
+							{
+								returnValue = sqlParameter.Value as int?;
+							}
+							else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+							{
+								// Check for reserved values with special behavior:
+								if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
+								{
+									if (!loggerScope.ContainsKey("FileID"))
+									{
+										// Update logging scope so subsequent logging for this block will include this value:
+										loggerScope["FileID"] = sqlParameter.Value;
+										fileControlBlock.SetLoggerScope(logger, loggerScope);
+									}
+
+									// Save value in output collection (as object, converting DBNull to null):
+									outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
+								}
+							}
+						}
+						#endregion
+
+						// Validate return code:
+						if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
+						{
+							logger.LogWarning($"Post-processor returned non-standard value {returnValue}");
+						}
+						else if (returnValue != 0) // Any other non-zero value (including null) will abort process
+						{
+							throw new Exception($"Invalid return value ({returnValue})");
+						}
+						else
+						{
+							logger.LogDebug("Post-processor complete");
+						}
+					}
+				}
+				catch (Exception ex)
+				{
+					throw new Exception("Exception executing post-processor", ex is AggregateException ae ? TaskUtilities.General.SimplifyAggregateException(ae) : ex);
+				}
+				finally
+				{
+					if (consoleOutput.Length > 0)
+					{
+						logger.LogDebug($"Post-processor console output follows:\n{consoleOutput}");
+						consoleOutput.Clear();
+					}
+				}
+				#endregion
+			}
+
+			// Return output collection (converting objects to strings), to be added to task return values:
+			return outputParameters.ToDictionary(entry => entry.Key, entry => entry.Value?.ToString());
+		}
+		#endregion
+
+		#region Private classes
+		/// <summary>
+		/// Container class to hold (and dispose of) source file information and handles to data
+		/// </summary>
+		private class FileControlBlock : IDisposable
+		{
+			#region Fields and constructors
+			private bool disposed = false;
+			private Stream filestream = null;
+			private TaskUtilities.StreamStack decryptionstream = null;
+			private byte[] fileHash = null;
+			private IDisposable loggerScope = null;
+			public FileControlBlock(FileInfo _fileInfo)
+			{
+				fileInfo = _fileInfo;
+				filestream = new FileStream(fileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.None);
+			}
+			#endregion
+
+			#region IDisposable implementation
+			public void Dispose()
+			{
+				Dispose(true);
+				GC.SuppressFinalize(this);
+			}
+			protected virtual void Dispose(bool disposing)
+			{
+				if (disposed == false && disposing)
+				{
+					if (decryptionstream != null)
+					{
+						decryptionstream.Dispose();
+						decryptionstream = null;
+					}
+					if (filestream != null)
+					{
+						filestream.Dispose();
+						filestream = null;
+					}
+					if (loggerScope != null)
+					{
+						loggerScope.Dispose();
+						loggerScope = null;
+					}
+				}
+				disposed = true;
+			}
+			#endregion
+
+			#region Properties
+			public FileInfo fileInfo { get; }
+			#endregion
+
+			#region Methods
+			/// <summary>
+			/// Add logger scope specific to processing of this file
+			/// </summary>
+			public void SetLoggerScope(ILogger logger, Dictionary<string, object> state)
+			{
+				// Dispose of existing scope, if any:
+				if (loggerScope != null)
+				{
+					loggerScope.Dispose();
+					loggerScope = null;
+				}
+
+				// Begin new logging scope with updated state:
+				loggerScope = logger.BeginScope(state);
+			}
+
+			/// <summary>
+			/// Get readable input stream for file data
+			/// </summary>
+			public Stream GetStream()
+			{
+				// If decryptionstream is empty (or does not exist), return raw stream:
+				return (decryptionstream?.Empty ?? true) ? filestream : decryptionstream.GetStream();
+			}
+
+			/// <summary>
+			/// Retrieve hash of file contents, using the specified provider
+			/// </summary>
+			public async Task<object> GetFileHash(IncrementalHash hashprovider)
+			{
+				// If hash has not already been calculated and no decryption stream is in use, calculate
+				// hash now and reset stream position to zero (if decryption stream has been created,
+				// we don't want to mess with the underlying filestream):
+				if (fileHash == null && decryptionstream == null)
+				{
+					fileHash = await TaskUtilities.Streams.GetStreamHash(filestream, hashprovider);
+					filestream.Position = 0;
+				}
+				return fileHash;
+			}
+			#endregion
 		}
 		#endregion
 	}

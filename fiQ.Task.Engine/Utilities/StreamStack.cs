@@ -15,6 +15,14 @@ namespace fiQ.TaskUtilities
 		#region Fields
 		private Stack<Stream> streams = new Stack<Stream>();
 		private bool disposed = false;
+
+		public bool Empty
+		{
+			get
+			{
+				return (streams.Count == 0);
+			}
+		}
 		#endregion
 
 		#region IDisposable implementation

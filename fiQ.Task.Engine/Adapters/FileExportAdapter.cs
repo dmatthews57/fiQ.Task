@@ -244,10 +244,10 @@ namespace fiQ.TaskAdapters
 						}
 					}
 					#endregion
-
-					// If this point is reached, consider overall operation successful
-					result.Success = true;
 				}
+
+				// If this point is reached, consider overall operation successful
+				result.Success = true;
 			}
 			catch (TaskExitException)
 			{
@@ -297,8 +297,8 @@ namespace fiQ.TaskAdapters
 			{
 				if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
 				{
-					// This parameter requires input value:
-					bool needsDefault = false;
+					// This parameter will require an input value if also an output parameter OR we are explicitly defaulting:
+					bool needsDefault = (defaultNulls || sqlParameter.Direction.HasFlag(ParameterDirection.Output));
 
 					// Check whether parameter is included in SQL parameter dictionary:
 					if (sqlParameters.ContainsKey(sqlParameter.ParameterName))
@@ -320,14 +320,13 @@ namespace fiQ.TaskAdapters
 						}
 					}
 
-					// If parameter value was not set above and either we are set to supply default NULL
-					// values OR this is also an OUTPUT parameter, set to explicit NULL:
-					if (needsDefault && (defaultNulls || sqlParameter.Direction.HasFlag(ParameterDirection.Output)))
+					// If we still need a default value, set to null (otherwise, any value not set above will be left
+					// unspecified; if stored procedure does not provide a default value, execution will fail and
+					// missing parameter will be indicated by exception string)
+					if (needsDefault)
 					{
 						sqlParameter.Value = DBNull.Value;
 					}
-					// (otherwise, value will be left unspecified; if stored procedure does not provide a default
-					// value, execution will fail and missing parameter will be indicated by exception string)
 				}
 			}
 			#endregion
