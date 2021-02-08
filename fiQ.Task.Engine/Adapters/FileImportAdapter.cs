@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Data.SqlTypes;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -12,24 +13,30 @@ using fiQ.TaskModels;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.VisualBasic.FileIO;
 
 namespace fiQ.TaskAdapters
 {
 	public class FileImportAdapter : TaskAdapter
 	{
 		#region Fields and constructors
+		// Private fields
 		private IMemoryCache memorycache;   // Injected by constructor, used to cache SQL stored procedure parameters
 		private IncrementalHash md5hash = null;
 		private bool disposed = false;
+		private Regex ImportModeValidationRegex = new Regex(@"^(RAW|XML|CSV)$");
 
+		// Private configuration parameter fields
 		private string importProcedureName = null;		// Stored procedure for actual data import
-		private int? importProcedureTimeout = null;		// Optional timeout (in seconds) for main import procedure call
+		private int? importProcedureTimeout = null;     // Optional timeout (in seconds) for main import procedure call
+		private string importMode = null;               // Optional, will override default behavior of structured data table
+		private string importDataParameterName = null;	// Optional, specifies stored procedure parameter to receive file contents
 		private string importPreProcessorName = null;	// Optional stored procedure for pre-processing file
 		private int? importPreProcessorTimeout = null;	// Optional timeout (in seconds) for pre-processor call
 		private string importPostProcessorName = null;	// Optional stored procedure for post-processing file
 		private int? importPostProcessorTimeout = null;	// Optional timeout (in seconds) for post-processor call
 		private string importPGPPrivateKeyRing = null;	// If present, data input will be PGP-decrypted with a key from the specified ring
-		private string importPGPPassphrase = null;		// If PGP private keyring specified, passphrase to access private key
+		private string importPGPPassphrase = null;      // If PGP private keyring specified, passphrase to access private key
 		private bool defaultNulls = false;				// If true, explicit DBNull value will be passed to all unrecognized stored procedure inputs
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -73,6 +80,25 @@ namespace fiQ.TaskAdapters
 				if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(importProcedureName) || string.IsNullOrEmpty(importFolder) || string.IsNullOrEmpty(filenameFilter))
 				{
 					throw new ArgumentException("Missing or invalid: one or more of ConnectionString/ImportProcedureName/ImportFolder/FilenameFilter");
+				}
+
+				// Retrieve import mode (default is RAW), validate if present:
+				importMode = parameters.GetString("ImportMode")?.ToUpperInvariant();
+				if (!string.IsNullOrEmpty(importMode))
+				{
+					if (!ImportModeValidationRegex.IsMatch(importMode))
+					{
+						throw new ArgumentException("Invalid ImportMode");
+					}
+				}
+				// Retrieve data parameter name, validate if present:
+				importDataParameterName = parameters.GetString("ImportDataParameterName");
+				if (!string.IsNullOrEmpty(importDataParameterName))
+				{
+					if (!importDataParameterName.StartsWith("@"))
+					{
+						throw new ArgumentException("Invalid ImportDataParameterName");
+					}
 				}
 
 				// Retrieve imported file archival settings:
@@ -232,11 +258,11 @@ namespace fiQ.TaskAdapters
 		/// and running collection of output parameters
 		/// </summary>
 		/// <returns>
-		/// A value indicating whether structured data is present (which may require further handling)
+		/// A dictionary of potential data parameters (all structured data parameters, add XML inputs if mode is XML)
 		/// </returns>
-		private async Task<bool> DeriveAndBindParameters(SqlCommand cmd, FileControlBlock fileControlBlock, Dictionary<string, object> outputParameters)
+		private async Task<Dictionary<string,SqlDbType>> DeriveAndBindParameters(SqlCommand cmd, FileControlBlock fileControlBlock, Dictionary<string, object> outputParameters)
 		{
-			bool hasStructuredData = false;
+			var dataParameters = new Dictionary<string, SqlDbType>(StringComparer.OrdinalIgnoreCase);
 
 			// Create cache key from database connection string (hashed, to avoid saving passwords/etc in collection) and stored
 			// proc name, check whether parameters have already been derived for this object within current run:
@@ -264,8 +290,8 @@ namespace fiQ.TaskAdapters
 			{
 				if (sqlParameter.SqlDbType == SqlDbType.Structured)
 				{
-					// Flag that caller will have to handle this parameter (apply valid data or remove), and set to NULL:
-					hasStructuredData = true;
+					// Add this parameter to return collection and set input to null (caller must apply valid data or remove):
+					dataParameters[sqlParameter.ParameterName] = SqlDbType.Structured;
 					sqlParameter.Value = DBNull.Value;
 
 					// Correct for a problem with DeriveParameters, which erroneously adds database name to type:
@@ -277,6 +303,12 @@ namespace fiQ.TaskAdapters
 				}
 				else if (sqlParameter.Direction.HasFlag(ParameterDirection.Input))
 				{
+					// If this is an XML field and we are processing in XML input mode, add to return collection:
+					if (sqlParameter.SqlDbType == SqlDbType.Xml && importMode == "XML")
+					{
+						dataParameters[sqlParameter.ParameterName] = SqlDbType.Xml;
+					}
+
 					// Check for reserved special parameters to be supplied based on file data:
 					switch (sqlParameter.ParameterName.ToUpperInvariant())
 					{
@@ -348,7 +380,15 @@ namespace fiQ.TaskAdapters
 			}
 			#endregion
 
-			return hasStructuredData;
+			return dataParameters;
+		}
+
+		/// <summary>
+		/// Provide priority sorting order of parameter value (preferring null -> DBNull.Value -> actual value)
+		/// </summary>
+		private static int ParameterSortOrder(object value)
+		{
+			return (value == null) ? 0 : (value == DBNull.Value ? 1 : 2);
 		}
 
 		/// <summary>
@@ -368,6 +408,7 @@ namespace fiQ.TaskAdapters
 				try
 				{
 					using (var cmd = new SqlCommand(importPreProcessorName, cnn) { CommandType = CommandType.StoredProcedure })
+					using (var preproclogscope = logger.BeginScope(new Dictionary<string, object>() { ["PreProcessorProcedure"] = importPreProcessorName }))
 					{
 						// Apply timeout if configured, derive and bind parameters, execute procedure:
 						if (importPreProcessorTimeout > 0) cmd.CommandTimeout = (int)importPreProcessorTimeout;
@@ -432,34 +473,81 @@ namespace fiQ.TaskAdapters
 			}
 
 			#region Execute data import
+			TextFieldParser filecsvreader = null;   // Used for CSV import method
+			StreamReader filestreamreader = null;   // Used for default import method
 			try
 			{
+				// If PGP decryption of source file is required, update read stream in FileControlBlock now:
+				if (!string.IsNullOrEmpty(importPGPPrivateKeyRing))
+				{
+					using var privatekeystream = new FileStream(importPGPPrivateKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
+					fileControlBlock.OpenDecryptionStream(privatekeystream, importPGPPassphrase);
+				}
+
+				// Create and execute import command object
 				using (var cmd = new SqlCommand(importProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
+				using (var proclogscope = logger.BeginScope(new Dictionary<string, object>() { ["ImportProcedure"] = importProcedureName }))
 				{
 					// Apply timeout if configured, derive and bind parameters:
 					if (importProcedureTimeout > 0) cmd.CommandTimeout = (int)importProcedureTimeout;
-					bool hasStructuredData = await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+					var dataParameters = await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
 
-					// TODO: BIND DATA
+					#region Bind data parameter
+					// Choose data parameter to receive input; start by retrieving all parameter names for the appropriate type:
+					var eligibleparms = dataParameters
+						.Where(entry => entry.Value == (importMode == "XML" ? SqlDbType.Xml : SqlDbType.Structured))
+						.Select(entry => entry.Key)
+						// If importDataParameterName is specified, select matching entry only:
+						.Where(parmname => string.IsNullOrEmpty(importDataParameterName) || parmname.Equals(importDataParameterName, StringComparison.OrdinalIgnoreCase))
+						// We have to access Count argument more than once, so harden to list to prevent multiple iterations:
+						.ToList();
 
-					#region Remove any parameters with NULL unstructured data
-					if (hasStructuredData)
+					// If no parameters found (either no inputs of correct type, or specific importDataParameterName not found), throw error:
+					if (eligibleparms.Count == 0)
 					{
-						// Any structured data parameters that are still set to DBNull must be removed (structured
-						// parameters can't be null, and table can't be empty):
-						var removeparms = cmd.Parameters
-							.Cast<SqlParameter>()
-							.Where(parm => parm.SqlDbType == SqlDbType.Structured && parm.Value == DBNull.Value);
-						if (removeparms.Any())
+						throw new ArgumentException(string.IsNullOrEmpty(importDataParameterName) ?
+							"No eligible input parameter found" : $"Input parameter name {importDataParameterName} not found");
+					}
+					else if (eligibleparms.Count > 1)
+					{
+						// If more than one eligible parameter was found, config did not specify; unless we have the specific case where exactly
+						// one parameter has not had a value supplied already, we have no way of deciding which parameter to use:
+						eligibleparms = eligibleparms.Where(parmname => cmd.Parameters[parmname].Value == null).ToList();
+						if (eligibleparms.Count != 1)
 						{
-							// Create list from enumerable (since we will be removing from collection as we go, force
-							// enumeration), then remove each entry by name (since ordinals will change)
-							var removeparmslist = removeparms.ToList();
-							foreach (var removeparm in removeparmslist)
-							{
-								cmd.Parameters.RemoveAt(removeparm.ParameterName);
-							}
+							throw new ArgumentException("More than one eligible data parameter found, ImportDataParameterName must be specified");
 						}
+					}
+
+					if (importMode == "XML")
+					{
+						cmd.Parameters[eligibleparms[0]].Value = new SqlXml(fileControlBlock.GetStream());
+					}
+					else if (fileControlBlock.fileInfo.Length > 0) // Ignore empty files
+					{
+						if (importMode == "CSV") // Stream in CSV data
+						{
+							filecsvreader = new TextFieldParser(fileControlBlock.GetStream());
+							// TODO: BIND INPUTCSV TO STREAMED DATA
+						}
+						else // Stream in raw format data
+						{
+							filestreamreader = new StreamReader(fileControlBlock.GetStream());
+							// TODO: BIND STREAMED DATA
+						}
+					}
+					#endregion
+
+					#region Remove any remaining parameters with null unstructured data
+					// Structured parameters cannot be null, and datasets cannot be empty; retrieve all structured data fields
+					// whose parameter value is still null, and remove from parameter collection entirely:
+					var removeparms = dataParameters
+						.Where(entry => entry.Value == SqlDbType.Structured)
+						.Select(entry => entry.Key)
+						.Where(fieldname => cmd.Parameters[fieldname].Value == DBNull.Value);
+					foreach (var removeparm in removeparms)
+					{
+						cmd.Parameters.RemoveAt(removeparm);
 					}
 					#endregion
 
@@ -500,7 +588,8 @@ namespace fiQ.TaskAdapters
 					// Validate return code:
 					if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
 					{
-						logger.LogWarning($"Import returned non-standard value {returnValue}, proceeding");
+						logger.LogWarning(rowsImported == null ? $"Import returned non-standard value {returnValue}, proceeding"
+							: $"Import returned non-standard value {returnValue} with {rowsImported} rows imported, proceeding");
 					}
 					else if (returnValue != 0) // Any other non-zero value (including null) will abort process
 					{
@@ -508,7 +597,7 @@ namespace fiQ.TaskAdapters
 					}
 					else
 					{
-						logger.LogInformation((rowsImported == null) ? "Import complete" : $"Import complete, {rowsImported} rows imported");
+						logger.LogInformation(rowsImported == null ? "Import complete" : $"Import complete, {rowsImported} rows imported");
 					}
 				}
 			}
@@ -523,6 +612,19 @@ namespace fiQ.TaskAdapters
 					logger.LogDebug($"Import console output follows:\n{consoleOutput}");
 					consoleOutput.Clear();
 				}
+
+				// Clean up raw and CSV mode reader objects (can't use using statements since these are conditionally initialized
+				// in a different scope from their use, and need to survive until after ExecuteNonQueryAsync call completes)
+				if (filecsvreader != null)
+				{
+					filecsvreader.Close();
+					filecsvreader = null;
+				}
+				if (filestreamreader != null)
+				{
+					filestreamreader.Dispose();
+					filestreamreader = null;
+				}
 			}
 			#endregion
 
@@ -532,6 +634,7 @@ namespace fiQ.TaskAdapters
 				try
 				{
 					using (var cmd = new SqlCommand(importPostProcessorName, cnn) { CommandType = CommandType.StoredProcedure })
+					using (var postproclogscope = logger.BeginScope(new Dictionary<string, object>() { ["PostProcessorProcedure"] = importPostProcessorName }))
 					{
 						// Apply timeout if configured, derive and bind parameters, execute procedure:
 						if (importPostProcessorTimeout > 0) cmd.CommandTimeout = (int)importPostProcessorTimeout;
@@ -693,6 +796,19 @@ namespace fiQ.TaskAdapters
 					filestream.Position = 0;
 				}
 				return fileHash;
+			}
+
+			public void OpenDecryptionStream(Stream privatekeysource, string privatekeypassphrase)
+			{
+				// In the event decryption stream is already open (should never happen), dispose first:
+				if (decryptionstream != null)
+				{
+					decryptionstream.Dispose();
+					decryptionstream = null;
+				}
+
+				// Open decryption stream around filestream, using provided private key data:
+				decryptionstream = TaskUtilities.Pgp.GetDecryptionStream(privatekeysource, privatekeypassphrase, filestream);
 			}
 			#endregion
 		}
