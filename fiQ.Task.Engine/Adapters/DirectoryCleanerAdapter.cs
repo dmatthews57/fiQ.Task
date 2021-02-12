@@ -40,7 +40,7 @@ namespace fiQ.TaskAdapters
 				var minLastWriteTime = DateTime.Now.Add((TimeSpan)(maxAge?.TotalMilliseconds > 0 ? maxAge?.Negate() : maxAge));
 
 				// Retrieve optional parameters (general):
-				string filenameRegex = parameters.GetString("FilenameRegex");
+				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"));
 				bool recurseFolders = parameters.GetBool("RecurseFolders");
 
 				// Retrieve optional archive parameters (indicating files should be zipped up prior to deletion); we will
@@ -55,9 +55,8 @@ namespace fiQ.TaskAdapters
 					}
 				}
 				string archiveSubfolder = string.IsNullOrEmpty(archiveFolder) ? null : parameters.GetString("ArchiveSubfolder");
-				string archiveRenameRegex = string.IsNullOrEmpty(archiveFolder) ? null : parameters.GetString("ArchiveRenameRegex");
-				string archiveRenameReplacement = string.IsNullOrEmpty(archiveRenameRegex) ? null : parameters.GetString("ArchiveRenameReplacement");
-				var rArchiveRenameRegex = string.IsNullOrEmpty(archiveRenameReplacement) ? null : new Regex(archiveRenameRegex, RegexOptions.IgnoreCase);
+				var archiveRenameRegex = string.IsNullOrEmpty(archiveFolder) ? null : TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"));
+				string archiveRenameReplacement = archiveRenameRegex == null ? null : (parameters.GetString("ArchiveRenameReplacement") ?? string.Empty);
 
 				// Ensure sourceFolder ends with trailing slash, for proper relative paths in recursive folders:
 				if (!sourceFolder.EndsWith(@"\"))
@@ -65,15 +64,17 @@ namespace fiQ.TaskAdapters
 					sourceFolder += @"\";
 				}
 
-				// Create regex object from custom string, if provided (and from file filter, otherwise - this
-				// check is performed to avoid false-positives on 8.3 version of filenames):
-				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.General.RegexFromFileFilter(filenameFilter)
-					: new Regex(filenameRegex, RegexOptions.IgnoreCase);
+
+				// If custom regex not specified, create one from file filter (this check is performed to avoid false-positives on 8.3 version of filenames):
+				if (filenameRegex == null)
+				{
+					filenameRegex = TaskUtilities.General.RegexFromFileFilter(filenameFilter);
+				}
 				#endregion
 
 				// Build listing of all files in source folder whose last write time is older than minimum value:
 				var fileList = Directory.EnumerateFiles(sourceFolder, filenameFilter, recurseFolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
-					.Where(fileName => rFilenameRegex.IsMatch(Path.GetFileName(fileName)))
+					.Where(fileName => filenameRegex.IsMatch(Path.GetFileName(fileName)))
 					.Select(fileName => new { FileName = fileName, LastWriteTime = File.GetLastWriteTime(fileName) })
 					.Where(file => file.LastWriteTime < minLastWriteTime);
 
@@ -106,7 +107,7 @@ namespace fiQ.TaskAdapters
 								}
 
 								// If regular expression/replacement not provided, append simple archive filename in date-based format:
-								if (string.IsNullOrEmpty(archiveRenameReplacement))
+								if (archiveRenameRegex == null)
 								{
 									archiveFilePath = Path.Combine(archiveFilePath, $"{file.LastWriteTime:yyyy-MM}.zip");
 								}
@@ -114,7 +115,7 @@ namespace fiQ.TaskAdapters
 								else
 								{
 									archiveFilePath = Path.Combine(archiveFilePath,
-										$"{rArchiveRenameRegex.Replace(Path.GetFileNameWithoutExtension(file.FileName), TaskUtilities.General.ApplyDateMacros(archiveRenameReplacement, file.LastWriteTime))}.zip");
+										$"{archiveRenameRegex.Replace(Path.GetFileNameWithoutExtension(file.FileName), TaskUtilities.General.ApplyDateMacros(archiveRenameReplacement, file.LastWriteTime))}.zip");
 								}
 
 								// Open/create resulting zip archive:

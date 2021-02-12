@@ -20,6 +20,16 @@ namespace fiQ.TaskUtilities
 		private static readonly Regex REGEX_DATE_MACRO_ADJUST = new Regex(@"[[](?<sign>[+-])(?<digits>\d*)(?<unit>[yMdHhms])[]]");
 		#endregion
 
+		#region Misc utility methods
+		/// <summary>
+		/// Create a Regex object from the specified string and options; if string is null or empty, returns null object
+		/// </summary>
+		public static Regex RegexIfPresent(string regex, RegexOptions regexoptions = RegexOptions.None)
+		{
+			return string.IsNullOrEmpty(regex) ? null : new Regex(regex, regexoptions);
+		}
+		#endregion
+
 		#region Exception management methods
 		/// <summary>
 		/// Simplify asynchronous exceptions (async function calls throw AggregateException even if

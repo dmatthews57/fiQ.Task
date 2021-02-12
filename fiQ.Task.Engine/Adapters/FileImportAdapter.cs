@@ -13,6 +13,7 @@ using fiQ.TaskModels;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.SqlServer.Server;
 using Microsoft.VisualBasic.FileIO;
 
 namespace fiQ.TaskAdapters
@@ -20,11 +21,13 @@ namespace fiQ.TaskAdapters
 	public class FileImportAdapter : TaskAdapter
 	{
 		#region Fields and constructors
+		// Private static fields
+		private static readonly Regex ImportModeValidationRegex = new Regex(@"^(RAW|XML|CSV)$");
+
 		// Private fields
 		private IMemoryCache memorycache;   // Injected by constructor, used to cache SQL stored procedure parameters
 		private IncrementalHash md5hash = null;
 		private bool disposed = false;
-		private Regex ImportModeValidationRegex = new Regex(@"^(RAW|XML|CSV)$");
 
 		// Private configuration parameter fields
 		private string importProcedureName = null;		// Stored procedure for actual data import
@@ -37,7 +40,9 @@ namespace fiQ.TaskAdapters
 		private int? importPostProcessorTimeout = null;	// Optional timeout (in seconds) for post-processor call
 		private string importPGPPrivateKeyRing = null;	// If present, data input will be PGP-decrypted with a key from the specified ring
 		private string importPGPPassphrase = null;      // If PGP private keyring specified, passphrase to access private key
-		private bool defaultNulls = false;				// If true, explicit DBNull value will be passed to all unrecognized stored procedure inputs
+		private bool defaultNulls = false;              // If true, explicit DBNull value will be passed to all unrecognized stored procedure inputs
+		private string delimiter = null;                // Used for ImportMode "CSV", when parsing source data (default comma)
+		private Regex importLineFilterRegex = null;		// If specified, only lines matching this regex will be imported ("RAW"/default mode only)
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
 		public FileImportAdapter(IConfiguration _config,
@@ -64,7 +69,8 @@ namespace fiQ.TaskAdapters
 		#endregion
 
 		/// <summary>
-		/// TODO: DESCRIPTION
+		/// Retrieve all files from the specified location (matching specified pattern), and import their contents
+		/// into the provided database using the stored procedure(s) specified
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
@@ -101,25 +107,19 @@ namespace fiQ.TaskAdapters
 					}
 				}
 
-				// Retrieve imported file archival settings:
+				// Retrieve imported file archival settings (either folder or rename regex required):
 				string archiveFolder = parameters.GetString("ArchiveFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
-				string archiveRenameRegex = parameters.GetString("ArchiveRenameRegex");
-				string archiveRenameReplacement = string.IsNullOrEmpty(archiveRenameRegex) ? null : parameters.GetString("ArchiveRenameReplacement", null, dateTimeNow);
-				if (string.IsNullOrEmpty(archiveFolder))
+				var archiveRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"));
+				string archiveRenameReplacement = archiveRenameRegex == null ? null : (parameters.GetString("ArchiveRenameReplacement", null, dateTimeNow) ?? string.Empty);
+				if (string.IsNullOrEmpty(archiveFolder) && archiveRenameRegex == null)
 				{
-					// If archive folder not specified, regex and replacement strings are required:
-					if (string.IsNullOrEmpty(archiveRenameReplacement))
-					{
-						throw new ArgumentException("Either ArchiveFolder or ArchiveRenameRegex/ArchiveRenameReplacement settings required");
-					}
+					throw new ArgumentException("Either ArchiveFolder or ArchiveRenameRegex settings required");
 				}
 				// Create archival folder, if it doesn't already exist:
 				else if (!Directory.Exists(archiveFolder))
 				{
 					Directory.CreateDirectory(archiveFolder);
 				}
-				// Create regex for archival process renaming, if required:
-				var rArchiveRenameRegex = string.IsNullOrEmpty(archiveRenameReplacement) ? null : new Regex(archiveRenameRegex, RegexOptions.IgnoreCase);
 
 				// Retrieve optional parameters:
 				importProcedureTimeout = parameters.Get<int>("ImportProcedureTimeout", int.TryParse);
@@ -130,7 +130,13 @@ namespace fiQ.TaskAdapters
 				importPGPPrivateKeyRing = parameters.GetString("ImportPGPPrivateKeyRing");
 				importPGPPassphrase = parameters.GetString("ImportPGPPassphrase");
 				defaultNulls = parameters.GetBool("DefaultNulls");
-				string filenameRegex = parameters.GetString("FilenameRegex");
+				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"));
+				delimiter = parameters.GetString("Delimiter");
+				if (string.IsNullOrEmpty(delimiter))
+				{
+					delimiter = ",";
+				}
+				importLineFilterRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("ImportLineFilterRegex"));
 				bool haltOnImportError = parameters.GetBool("HaltOnImportError");
 
 				// Add any parameters to be applied to SQL statements to dictionary:
@@ -140,15 +146,16 @@ namespace fiQ.TaskAdapters
 					sqlParameters[atparm] = parameters.GetString(atparm, null, dateTimeNow);
 				}
 
-				// Create regex object from custom string, if provided (and from file filter, otherwise - this
-				// check is performed to avoid false-positives on 8.3 version of filenames):
-				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.General.RegexFromFileFilter(filenameFilter)
-					: new Regex(filenameRegex, RegexOptions.IgnoreCase);
+				// If custom regex not specified, create one from file filter (this check is performed to avoid false-positives on 8.3 version of filenames):
+				if (filenameRegex == null)
+				{
+					filenameRegex = TaskUtilities.General.RegexFromFileFilter(filenameFilter);
+				}
 				#endregion
 
 				// Build listing of all matching files in import folder:
 				var fileInfoList = Directory.EnumerateFiles(importFolder, filenameFilter)
-					.Where(fileName => rFilenameRegex.IsMatch(Path.GetFileName(fileName)))
+					.Where(fileName => filenameRegex.IsMatch(Path.GetFileName(fileName)))
 					.Select(fileName => new FileInfo(fileName));
 
 				if (fileInfoList.Any())
@@ -168,7 +175,7 @@ namespace fiQ.TaskAdapters
 
 							// Determine path to archive file to after completion of import process:
 							var archiveFilePath = Path.Combine(string.IsNullOrEmpty(archiveFolder) ? importFolder : archiveFolder,
-								rArchiveRenameRegex == null ? fileInfo.Name : rArchiveRenameRegex.Replace(fileInfo.Name, archiveRenameReplacement));
+								archiveRenameRegex == null ? fileInfo.Name : archiveRenameRegex.Replace(fileInfo.Name, archiveRenameReplacement));
 							if (archiveFilePath.Equals(fileInfo.FullName, StringComparison.OrdinalIgnoreCase))
 							{
 								logger.LogWarning($"Import and archive folders are the same, file will not be archived");
@@ -384,11 +391,71 @@ namespace fiQ.TaskAdapters
 		}
 
 		/// <summary>
-		/// Provide priority sorting order of parameter value (preferring null -> DBNull.Value -> actual value)
+		/// Stream data from source into IEnumerable to be applied to SQL datatable
 		/// </summary>
-		private static int ParameterSortOrder(object value)
+		/// <remarks>
+		/// Note that this function will execute source reads synchronously (during actual stored procedure execution)
+		/// </remarks>
+		private IEnumerable<SqlDataRecord> StreamDataTable(StreamReader rawReader = null, TextFieldParser csvReader = null)
 		{
-			return (value == null) ? 0 : (value == DBNull.Value ? 1 : 2);
+			// Set up metadata object matching user-defined type in SQL (contains row identifier column and RowData varchar(max) column);
+			// this could be made configurable, but would require some complex logic below to properly map columns:
+			var udt_ImportTable_Schema = new SqlMetaData[] {
+				new SqlMetaData("RowID", SqlDbType.Int),
+				new SqlMetaData("RowData", SqlDbType.VarChar, SqlMetaData.Max)
+			};
+
+			// Create record to populate (SQL server will receive each row when "yield return" is called, meaning
+			// we can just update this inputRecord with new data for each input row):
+			var inputRecord = new SqlDataRecord(udt_ImportTable_Schema);
+			int rowCount = 1;
+
+			// If specialized CSV reader provided, use TextFieldParser to read all available data and pass to SQL in custom-delimited
+			// string (note this could be made configurable, using a custom input table type with discrete columns rather than a single
+			// delimited string data column):
+			if (csvReader != null)
+			{
+				var csvFieldString = new StringBuilder();
+				while (!csvReader.EndOfData)
+				{
+					inputRecord.SetInt32(0, rowCount++);
+					// Read separated columns from input source, and construct string using custom delimiter "|::|". Note that
+					// SQL will need to be prepared to re-tokenize string using this delimiter, and de-escape "|::" with "|:"
+					// only AFTER doing so (also note that any fields absent in source data will be absent in input row - i.e.
+					// number of column/fields could be inconsistent between rows, meaning that SQL must be prepared for
+					// "ragged right" type data and treat missing columns accordingly):
+					var csvFields = csvReader.ReadFields();
+					for (int i = 0; i < csvFields.Length; ++i)
+					{
+						csvFieldString.Append(csvFields[i].Replace("|:", "|::"));
+						csvFieldString.Append("|::|");
+					}
+					inputRecord.SetString(1, csvFieldString.ToString());
+					yield return inputRecord;
+					csvFieldString.Clear();
+				}
+			}
+			// Otherwise if raw StreamReader provided, just read all lines as-is:
+			else if (rawReader != null)
+			{
+				while (!rawReader.EndOfStream)
+				{
+					inputRecord.SetInt32(0, rowCount++);
+					inputRecord.SetString(1, rawReader.ReadLine());
+
+					// If line filter regex configured, only actually return this line if it matches (note: with regex specified,
+					// it is possible that no lines will match and IEnumerable will be empty - this will cause an exception to be
+					// thrown at execution time, requiring a null collection rather than an empty one):
+					if (importLineFilterRegex == null ? true : importLineFilterRegex.IsMatch(inputRecord.GetString(1)))
+					{
+						yield return inputRecord;
+					}
+				}
+			}
+			else
+			{
+				throw new ArgumentException("No reader object supplied to stream to data table");
+			}
 		}
 
 		/// <summary>
@@ -527,13 +594,17 @@ namespace fiQ.TaskAdapters
 					{
 						if (importMode == "CSV") // Stream in CSV data
 						{
-							filecsvreader = new TextFieldParser(fileControlBlock.GetStream());
-							// TODO: BIND INPUTCSV TO STREAMED DATA
+							filecsvreader = new TextFieldParser(fileControlBlock.GetStream())
+							{
+								Delimiters = new string[] { delimiter },
+								HasFieldsEnclosedInQuotes = true
+							};
+							cmd.Parameters[eligibleparms[0]].Value = StreamDataTable(csvReader: filecsvreader);
 						}
 						else // Stream in raw format data
 						{
 							filestreamreader = new StreamReader(fileControlBlock.GetStream());
-							// TODO: BIND STREAMED DATA
+							cmd.Parameters[eligibleparms[0]].Value = StreamDataTable(rawReader: filestreamreader);
 						}
 					}
 					#endregion

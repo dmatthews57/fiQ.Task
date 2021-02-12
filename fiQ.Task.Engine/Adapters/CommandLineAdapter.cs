@@ -12,9 +12,6 @@ using Microsoft.Extensions.Logging;
 
 namespace fiQ.TaskAdapters
 {
-	/// <summary>
-	/// TaskAdapter to execute another program via command line
-	/// </summary>
 	public class CommandLineAdapter : TaskAdapter
 	{
 		#region Fields and constructors
@@ -25,7 +22,7 @@ namespace fiQ.TaskAdapters
 		#endregion
 
 		/// <summary>
-		/// TODO: DESCRIPTION
+		/// Construct command line for the specified executable and arguments, execute and validate results
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{

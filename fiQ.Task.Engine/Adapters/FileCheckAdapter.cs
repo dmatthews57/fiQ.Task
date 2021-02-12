@@ -37,19 +37,20 @@ namespace fiQ.TaskAdapters
 				{
 					throw new ArgumentException("Missing SourceFolder and/or FilenameFilter");
 				}
-				string filenameRegex = parameters.GetString("FilenameRegex");
+				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"));
 				bool recurseFolders = parameters.GetBool("RecurseFolders");
 
-				// Create regex object from custom string, if provided (and from file filter, otherwise - this
-				// check is performed to avoid false-positives on 8.3 version of filenames):
-				var rFilenameRegex = string.IsNullOrEmpty(filenameRegex) ? TaskUtilities.General.RegexFromFileFilter(filenameFilter)
-					: new Regex(filenameRegex, RegexOptions.IgnoreCase);
+				// If custom regex not specified, create one from file filter (this check is performed to avoid false-positives on 8.3 version of filenames):
+				if (filenameRegex == null)
+				{
+					filenameRegex = TaskUtilities.General.RegexFromFileFilter(filenameFilter);
+				}
 				#endregion
 
 				// Set successful result if any files found in specified folder matching filter and regex:
 				result.Success = Directory.EnumerateFiles(sourceFolder, filenameFilter, recurseFolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
 					.Select(Path.GetFileName)
-					.Where(fileName => rFilenameRegex.IsMatch(fileName))
+					.Where(fileName => filenameRegex.IsMatch(fileName))
 					.Any();
 			}
 			catch (Exception ex)

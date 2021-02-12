@@ -34,9 +34,9 @@ namespace fiQ.TaskAdapters
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		private OutputColumnTemplateListSet outputColumnListSet = null;
 
-		private static Regex stringFormatRegex = new Regex(@"^[^{]*{0(,-?\d+)?(:.+)?}[^{]*$"); // string.Format style with single argument and optional formatting
-		private static Regex qualifiedStringRegex = new Regex("^\".*\"$"); // String is already wrapped in double-quotes
-		private static Regex quoteEscapeRegex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
+		private static readonly Regex stringFormatRegex = new Regex(@"^[^{]*{0(,-?\d+)?(:.+)?}[^{]*$"); // string.Format style with single argument and optional formatting
+		private static readonly Regex qualifiedStringRegex = new Regex("^\".*\"$"); // String is already wrapped in double-quotes
+		private static readonly Regex quoteEscapeRegex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
 
 		public FileExportAdapter(IConfiguration _config,
 			ILogger<FileExportAdapter> _logger,
