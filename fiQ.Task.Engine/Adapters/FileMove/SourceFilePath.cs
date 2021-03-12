@@ -5,7 +5,7 @@
 	/// </summary>
 	internal class SourceFilePath
 	{
-		public string FolderPath { get; init; }
+		public string FolderPath { get; set; }
 		public string FilenameFilter { get; init; }
 		public string FilenameRegex { get; init; }
 		public string DestinationSubfolder { get; init; }

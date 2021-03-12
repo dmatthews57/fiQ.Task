@@ -1,7 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace fiQ.TaskAdapters.FileMove
 {
@@ -22,7 +24,7 @@ namespace fiQ.TaskAdapters.FileMove
 		}
 		#endregion
 
-		#region Connection implementation - Files
+		#region Connection implementation - File transfer
 		/// <summary>
 		/// Retrieve listing of downloadable files
 		/// </summary>
@@ -52,6 +54,102 @@ namespace fiQ.TaskAdapters.FileMove
 				);
 			}
 			return fileset;
+		}
+		/// <summary>
+		/// Open writable stream for specified destination file
+		/// </summary>
+		public override Stream GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
+		{
+			// Ensure destination base folder exists:
+			string destPath = config.location;
+			if (!Directory.Exists(destPath))
+			{
+				Directory.CreateDirectory(destPath);
+			}
+			// If subfolder specified, add to destination path and ensure subfolder exists:
+			if (!string.IsNullOrEmpty(folderPath))
+			{
+				destPath = Path.Combine(destPath, folderPath);
+				if (!Directory.Exists(destPath))
+				{
+					Directory.CreateDirectory(destPath);
+				}
+			}
+
+			// Add filename to destination path and handle existing file, if not overwriting:
+			destPath = Path.Combine(destPath, fileName);
+			if (preventOverwrite)
+			{
+				destPath = GetNextFilename(destPath);
+			}
+
+			// Return FileStream object writing to specified destination path:
+			return new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+		}
+		/// <summary>
+		/// Perform transfer of data from file at specified path to destination stream
+		/// </summary>
+		public override async Task DoTransfer(string folderPath, string fileName, Stream writestream)
+		{
+			// Open read stream on source file:
+			using var readstream = new FileStream(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName),
+				FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+			if (config.PGP)
+			{
+				// Open private key file and decrypt source stream contents into destination stream:
+				using var privatekeystream = new FileStream(config.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
+				await TaskUtilities.Pgp.Decrypt(privatekeystream, config.pgpPassphrase, readstream, writestream);
+			}
+			else
+			{
+				// Do direct copy of data from read stream to write:
+				await readstream.CopyToAsync(writestream);
+			}
+		}
+		#endregion
+
+		#region Connection implementation - File management
+		/// <summary>
+		/// Rename specified file
+		/// </summary>
+		public override void RenameFile(string folderPath, string fileName, string newFileName)
+		{
+			// Combine base location and subfolder path, handle duplicate filenames, then rename:
+			folderPath = string.IsNullOrEmpty(folderPath) ? config.location : Path.Combine(config.location, folderPath);
+			string destFilePath = GetNextFilename(Path.Combine(folderPath, newFileName));
+			File.Move(Path.Combine(folderPath, fileName), destFilePath);
+		}
+		/// <summary>
+		/// Delete specified file
+		/// </summary>
+		public override void DeleteFile(string folderPath, string fileName)
+		{
+			File.Delete(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName));
+		}
+		#endregion
+
+		#region Private methods
+		/// <summary>
+		/// Check whether existing filename exists at specified path; if so, generate a
+		/// unique filename by adding an integer suffix (incrementing until not found)
+		/// </summary>
+		private static string GetNextFilename(string filePath, int maxDuplicates = 10)
+		{
+			if (File.Exists(filePath))
+			{
+				for (int i = 0; i < maxDuplicates; i++)
+				{
+					var testPath = $"{filePath}.{i}";
+					if (!File.Exists(testPath))
+					{
+						return testPath;
+					}
+				}
+				// If this point is reached, maximum duplicate files found - throw exception:
+				throw new Exception($"Maximum number of duplicate files at path {filePath}");
+			}
+			else return filePath;
 		}
 		#endregion
 	}

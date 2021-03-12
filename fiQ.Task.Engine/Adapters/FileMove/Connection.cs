@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace fiQ.TaskAdapters.FileMove
@@ -49,8 +50,15 @@ namespace fiQ.TaskAdapters.FileMove
 		public abstract void Disconnect();
 		#endregion
 
-		#region Abstract methods - Files
+		#region Abstract methods - File transfer
 		public abstract HashSet<DownloadFile> GetFileList(List<SourceFilePath> paths);
+		public abstract Stream GetWriteStream(string folderPath, string fileName, bool preventOverwrite);
+		public abstract Task DoTransfer(string folderPath, string fileName, Stream writestream);
+		#endregion
+
+		#region Abstract methods - File management
+		public abstract void RenameFile(string folderPath, string fileName, string newFileName);
+		public abstract void DeleteFile(string folderPath, string fileName);
 		#endregion
 	}
 }

@@ -1,6 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.IO;
+using System.Text.Json.Serialization;
 
 namespace fiQ.TaskAdapters.FileMove
 {
@@ -9,13 +8,9 @@ namespace fiQ.TaskAdapters.FileMove
 	/// </summary>
 	internal class DownloadFile : IEquatable<DownloadFile>
 	{
-		#region Fields and constructors
+		#region Standard properties
 		/// <summary>
-		/// Destination subfolder to which file will be downloaded (not serialized or included in hash)
-		/// </summary>
-		private string DestinationSubfolder = null;
-		/// <summary>
-		/// Source subfolder from which file will be (or was) downloaded
+		/// Source subfolder from which file was (or will be) downloaded
 		/// </summary>
 		public string fileFolder { get; set; }
 		/// <summary>
@@ -30,11 +25,28 @@ namespace fiQ.TaskAdapters.FileMove
 		/// Size of file in bytes
 		/// </summary>
 		public long size { get; set; } = 0;
+		#endregion
+
+		#region Special properties
+		/// <summary>
+		/// Destination subfolder to which file will be downloaded (not serialized or included in hash)
+		/// </summary>
+		/// <remarks>
+		/// Only relevant for files to be downloaded
+		/// </remarks>
+		[JsonIgnore(Condition = JsonIgnoreCondition.Always)]
+		public string DestinationSubfolder { get; } = null;
+
 		/// <summary>
 		/// Date file was downloaded (serialized but not part of hash)
 		/// </summary>
-		public DateTime downloadedAt { get; set; } = DateTime.Now;
+		/// <remarks>
+		/// Only relevant for files that have already been downloaded
+		/// </remarks>
+		public DateTime downloadedAt { get; } = DateTime.Now;
+		#endregion
 
+		#region Constructors
 		/// <summary>
 		/// Default constructor
 		/// </summary>

@@ -20,13 +20,25 @@ namespace fiQ.TaskUtilities
 		private static readonly Regex REGEX_DATE_MACRO_ADJUST = new Regex(@"[[](?<sign>[+-])(?<digits>\d*)(?<unit>[yMdHhms])[]]");
 		#endregion
 
-		#region Misc utility methods
+		#region Regex utility methods
 		/// <summary>
-		/// Create a Regex object from the specified string and options; if string is null or empty, returns null object
+		/// Create a Regex object from the specified string and options
 		/// </summary>
+		/// <returns>null if string is null or empty, Regex otherwise</returns>
 		public static Regex RegexIfPresent(string regex, RegexOptions regexoptions = RegexOptions.None)
 		{
 			return string.IsNullOrEmpty(regex) ? null : new Regex(regex, regexoptions);
+		}
+
+		/// <summary>
+		/// Convert file filter to filename validation regex
+		/// </summary>
+		/// <returns>null if string is null or empty, case-insensitive Regex otherwise</returns>
+		public static Regex RegexFromFileFilter(string fileFilter)
+		{
+			// Escape regex-reserved characters, then convert escaped wildcards (* and ?) to their regex equivalents:
+			return string.IsNullOrEmpty(fileFilter) ? null
+				: new Regex($"^{Regex.Escape(fileFilter).Replace(@"\*", ".*").Replace(@"\?", ".")}$", RegexOptions.IgnoreCase);
 		}
 		#endregion
 
@@ -56,41 +68,6 @@ namespace fiQ.TaskUtilities
 
 			// If AggregateEx is not null there are multiple exceptions, otherwise there is only one:
 			return AggregateEx ?? SingleEx;
-		}
-		#endregion
-
-		#region Filename management methods
-		/// <summary>
-		/// Check whether existing filename exists at specified path; if so, generate a
-		/// unique filename by adding an integer suffix (incrementing until not found)
-		/// </summary>
-		public static string GetNextFilename(string filePath, int maxDuplicates = 100)
-		{
-			if (File.Exists(filePath))
-			{
-				for (int i = 0; i < maxDuplicates; i++)
-				{
-					var testPath = $"{filePath}.{i}";
-					if (!File.Exists(testPath))
-					{
-						return testPath;
-					}
-				}
-				// If this point is reached, maximum duplicate files found - throw exception:
-				throw new Exception($"Maximum number of duplicate files at path {filePath}");
-			}
-			else return filePath;
-		}
-
-		/// <summary>
-		/// Convert file filter to filename validation regex
-		/// </summary>
-		/// <returns>A case-insensitive Regex object with the converted regular expression</returns>
-		public static Regex RegexFromFileFilter(string fileFilter)
-		{
-			// Escape regex-reserved characters, then convert escaped wildcards (* and ?) to their regex equivalents:
-			return string.IsNullOrEmpty(fileFilter) ? null
-				: new Regex($"^{Regex.Escape(fileFilter).Replace(@"\*", ".*").Replace(@"\?", ".")}$", RegexOptions.IgnoreCase);
 		}
 		#endregion
 
