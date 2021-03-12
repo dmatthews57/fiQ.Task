@@ -8,11 +8,11 @@ namespace fiQ.TaskUtilities
 	public static class General
 	{
 		#region Public fields
+		public static readonly Regex REGEX_GUID = new Regex(@"^(\{)?[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}(\})?$");
 		public static readonly Regex REGEX_DATE_MACRO = new Regex(@"<U?(yy|MM|dd|HH|hh|H|h|mm|ss)+([[][+-]\d*[yMdHhms][]])*>");
 		public static readonly Regex REGEX_NESTEDPARM_MACRO = new Regex(@"<@(?<name>[^>]+)>");
 		public static readonly Regex REGEX_DIRPATH = new Regex(@"^(?:[a-zA-Z]\:|[\\/]{2}[\w\-.]+[\\/][\w\-. ]+\$?)(?:[\\/][\w\-. <>\[\]]+)*[\\/]?$");
 		public static readonly Regex REGEX_EMAIL = new Regex(@"^([A-Za-z0-9]((\.(?!\.))|[A-Za-z0-9_+-])*)(?<=[A-Za-z0-9_-])@([A-Za-z0-9][A-Za-z0-9-]*(?<=[A-Za-z0-9])\.)+[A-Za-z0-9][A-Za-z0-9-]{0,22}(?<=[A-Za-z0-9])$");
-		public static readonly Regex REGEX_GUID = new Regex(@"^(\{)?[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}(\})?$");
 		#endregion
 
 		#region Private fields
@@ -89,7 +89,8 @@ namespace fiQ.TaskUtilities
 		public static Regex RegexFromFileFilter(string fileFilter)
 		{
 			// Escape regex-reserved characters, then convert escaped wildcards (* and ?) to their regex equivalents:
-			return new Regex($"^{Regex.Escape(fileFilter).Replace(@"\*", ".*").Replace(@"\?", ".")}$", RegexOptions.IgnoreCase);
+			return string.IsNullOrEmpty(fileFilter) ? null
+				: new Regex($"^{Regex.Escape(fileFilter).Replace(@"\*", ".*").Replace(@"\?", ".")}$", RegexOptions.IgnoreCase);
 		}
 		#endregion
 
@@ -101,6 +102,11 @@ namespace fiQ.TaskUtilities
 		/// </summary>
 		public static string ApplyDateMacros(string macro, DateTime applyDateTime)
 		{
+			if (string.IsNullOrEmpty(macro))
+			{
+				return macro;
+			}
+
 			// Input string may contain multiple macro instances; pull all distinct matches from string for processing (any
 			// repeated macro only needs to be processed once, as all instances in the original string will be replaced):
 			var matches = REGEX_DATE_MACRO.Matches(macro)

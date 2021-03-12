@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
 using System.Data.SqlTypes;
 using System.IO;
 using System.Linq;
@@ -10,10 +9,11 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using fiQ.TaskModels;
+using Microsoft.Data.SqlClient;
+using Microsoft.Data.SqlClient.Server;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.SqlServer.Server;
 using Microsoft.VisualBasic.FileIO;
 
 namespace fiQ.TaskAdapters
@@ -82,7 +82,7 @@ namespace fiQ.TaskAdapters
 				string connectionString = config.GetConnectionString(parameters.GetString("ConnectionString"));
 				importProcedureName = parameters.GetString("ImportProcedureName");
 				string importFolder = parameters.GetString("ImportFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
-				string filenameFilter = parameters.GetString("FilenameFilter");
+				string filenameFilter = parameters.GetString("FilenameFilter", null, dateTimeNow);
 				if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(importProcedureName) || string.IsNullOrEmpty(importFolder) || string.IsNullOrEmpty(filenameFilter))
 				{
 					throw new ArgumentException("Missing or invalid: one or more of ConnectionString/ImportProcedureName/ImportFolder/FilenameFilter");
@@ -109,7 +109,7 @@ namespace fiQ.TaskAdapters
 
 				// Retrieve imported file archival settings (either folder or rename regex required):
 				string archiveFolder = parameters.GetString("ArchiveFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
-				var archiveRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"));
+				var archiveRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"), RegexOptions.IgnoreCase);
 				string archiveRenameReplacement = archiveRenameRegex == null ? null : (parameters.GetString("ArchiveRenameReplacement", null, dateTimeNow) ?? string.Empty);
 				if (string.IsNullOrEmpty(archiveFolder) && archiveRenameRegex == null)
 				{
@@ -130,7 +130,7 @@ namespace fiQ.TaskAdapters
 				importPGPPrivateKeyRing = parameters.GetString("ImportPGPPrivateKeyRing");
 				importPGPPassphrase = parameters.GetString("ImportPGPPassphrase");
 				defaultNulls = parameters.GetBool("DefaultNulls");
-				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"));
+				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"), RegexOptions.IgnoreCase);
 				delimiter = parameters.GetString("Delimiter");
 				if (string.IsNullOrEmpty(delimiter))
 				{
@@ -161,7 +161,7 @@ namespace fiQ.TaskAdapters
 				if (fileInfoList.Any())
 				{
 					#region Connect to database and process all files in list
-					using (var cnn = new SqlConnection(connectionString))
+					await using (var cnn = new SqlConnection(connectionString))
 					{
 						await cnn.OpenAsync();
 
@@ -325,6 +325,9 @@ namespace fiQ.TaskAdapters
 						case "@FILEFOLDER":
 							sqlParameter.Value = fileControlBlock.fileInfo.DirectoryName;
 							break;
+						case "@FILEWRITETIME":
+							sqlParameter.Value = fileControlBlock.fileInfo.LastWriteTime;
+							break;
 						case "@FILEWRITETIMEUTC":
 							sqlParameter.Value = fileControlBlock.fileInfo.LastWriteTimeUtc;
 							break;
@@ -474,54 +477,52 @@ namespace fiQ.TaskAdapters
 				#region Execute pre-processor
 				try
 				{
-					using (var cmd = new SqlCommand(importPreProcessorName, cnn) { CommandType = CommandType.StoredProcedure })
-					using (var preproclogscope = logger.BeginScope(new Dictionary<string, object>() { ["PreProcessorProcedure"] = importPreProcessorName }))
+					await using var cmd = new SqlCommand(importPreProcessorName, cnn) { CommandType = CommandType.StoredProcedure };
+					using var preproclogscope = logger.BeginScope(new Dictionary<string, object>() { ["PreProcessorProcedure"] = importPreProcessorName });
+					// Apply timeout if configured, derive and bind parameters, execute procedure:
+					if (importPreProcessorTimeout > 0) cmd.CommandTimeout = (int)importPreProcessorTimeout;
+					await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+					await cmd.ExecuteNonQueryAsync();
+
+					#region Iterate through output parameters
+					int? returnValue = null;
+					foreach (SqlParameter sqlParameter in cmd.Parameters)
 					{
-						// Apply timeout if configured, derive and bind parameters, execute procedure:
-						if (importPreProcessorTimeout > 0) cmd.CommandTimeout = (int)importPreProcessorTimeout;
-						await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
-						await cmd.ExecuteNonQueryAsync();
-
-						#region Iterate through output parameters
-						int? returnValue = null;
-						foreach (SqlParameter sqlParameter in cmd.Parameters)
+						if (sqlParameter.Direction == ParameterDirection.ReturnValue)
 						{
-							if (sqlParameter.Direction == ParameterDirection.ReturnValue)
+							returnValue = sqlParameter.Value as int?;
+						}
+						else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+						{
+							// Check for reserved values with special behavior:
+							if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
 							{
-								returnValue = sqlParameter.Value as int?;
-							}
-							else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
-							{
-								// Check for reserved values with special behavior:
-								if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
+								if (!loggerScope.ContainsKey("FileID"))
 								{
-									if (!loggerScope.ContainsKey("FileID"))
-									{
-										// Set logging scope so subsequent logging for this block will include this value:
-										loggerScope["FileID"] = sqlParameter.Value;
-										fileControlBlock.SetLoggerScope(logger, loggerScope);
-									}
+									// Set logging scope so subsequent logging for this block will include this value:
+									loggerScope["FileID"] = sqlParameter.Value;
+									fileControlBlock.SetLoggerScope(logger, loggerScope);
 								}
-
-								// Save value in output collection (as object, converting DBNull to null):
-								outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
 							}
-						}
-						#endregion
 
-						// Validate return code:
-						if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
-						{
-							logger.LogWarning($"Pre-processor returned non-standard value {returnValue}, proceeding with import");
+							// Save value in output collection (as object, converting DBNull to null):
+							outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
 						}
-						else if (returnValue != 0) // Any other non-zero value (including null) will abort process
-						{
-							throw new Exception($"Invalid return value ({returnValue})");
-						}
-						else
-						{
-							logger.LogDebug("Pre-processor complete");
-						}
+					}
+					#endregion
+
+					// Validate return code:
+					if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
+					{
+						logger.LogWarning($"Pre-processor returned non-standard value {returnValue}, proceeding with import");
+					}
+					else if (returnValue != 0) // Any other non-zero value (including null) will abort process
+					{
+						throw new Exception($"Invalid return value ({returnValue})");
+					}
+					else
+					{
+						logger.LogDebug("Pre-processor complete");
 					}
 				}
 				catch (Exception ex)
@@ -552,124 +553,122 @@ namespace fiQ.TaskAdapters
 				}
 
 				// Create and execute import command object
-				using (var cmd = new SqlCommand(importProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
-				using (var proclogscope = logger.BeginScope(new Dictionary<string, object>() { ["ImportProcedure"] = importProcedureName }))
+				await using var cmd = new SqlCommand(importProcedureName, cnn) { CommandType = CommandType.StoredProcedure };
+				using var proclogscope = logger.BeginScope(new Dictionary<string, object>() { ["ImportProcedure"] = importProcedureName });
+				// Apply timeout if configured, derive and bind parameters:
+				if (importProcedureTimeout > 0) cmd.CommandTimeout = (int)importProcedureTimeout;
+				var dataParameters = await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+
+				#region Bind data parameter
+				// Choose data parameter to receive input; start by retrieving all parameter names for the appropriate type:
+				var eligibleparms = dataParameters
+					.Where(entry => entry.Value == (importMode == "XML" ? SqlDbType.Xml : SqlDbType.Structured))
+					.Select(entry => entry.Key)
+					// If importDataParameterName is specified, select matching entry only:
+					.Where(parmname => string.IsNullOrEmpty(importDataParameterName) || parmname.Equals(importDataParameterName, StringComparison.OrdinalIgnoreCase))
+					// We have to access Count argument more than once, so harden to list to prevent multiple iterations:
+					.ToList();
+
+				// If no parameters found (either no inputs of correct type, or specific importDataParameterName not found), throw error:
+				if (eligibleparms.Count == 0)
 				{
-					// Apply timeout if configured, derive and bind parameters:
-					if (importProcedureTimeout > 0) cmd.CommandTimeout = (int)importProcedureTimeout;
-					var dataParameters = await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
-
-					#region Bind data parameter
-					// Choose data parameter to receive input; start by retrieving all parameter names for the appropriate type:
-					var eligibleparms = dataParameters
-						.Where(entry => entry.Value == (importMode == "XML" ? SqlDbType.Xml : SqlDbType.Structured))
-						.Select(entry => entry.Key)
-						// If importDataParameterName is specified, select matching entry only:
-						.Where(parmname => string.IsNullOrEmpty(importDataParameterName) || parmname.Equals(importDataParameterName, StringComparison.OrdinalIgnoreCase))
-						// We have to access Count argument more than once, so harden to list to prevent multiple iterations:
-						.ToList();
-
-					// If no parameters found (either no inputs of correct type, or specific importDataParameterName not found), throw error:
-					if (eligibleparms.Count == 0)
+					throw new ArgumentException(string.IsNullOrEmpty(importDataParameterName) ?
+						"No eligible input parameter found" : $"Input parameter name {importDataParameterName} not found");
+				}
+				else if (eligibleparms.Count > 1)
+				{
+					// If more than one eligible parameter was found, config did not specify; unless we have the specific case where exactly
+					// one parameter has not had a value supplied already, we have no way of deciding which parameter to use:
+					eligibleparms = eligibleparms.Where(parmname => cmd.Parameters[parmname].Value == null).ToList();
+					if (eligibleparms.Count != 1)
 					{
-						throw new ArgumentException(string.IsNullOrEmpty(importDataParameterName) ?
-							"No eligible input parameter found" : $"Input parameter name {importDataParameterName} not found");
+						throw new ArgumentException("More than one eligible data parameter found, ImportDataParameterName must be specified");
 					}
-					else if (eligibleparms.Count > 1)
+				}
+
+				if (importMode == "XML")
+				{
+					cmd.Parameters[eligibleparms[0]].Value = new SqlXml(fileControlBlock.GetStream());
+				}
+				else if (fileControlBlock.fileInfo.Length > 0) // Ignore empty files
+				{
+					if (importMode == "CSV") // Stream in CSV data
 					{
-						// If more than one eligible parameter was found, config did not specify; unless we have the specific case where exactly
-						// one parameter has not had a value supplied already, we have no way of deciding which parameter to use:
-						eligibleparms = eligibleparms.Where(parmname => cmd.Parameters[parmname].Value == null).ToList();
-						if (eligibleparms.Count != 1)
+						filecsvreader = new TextFieldParser(fileControlBlock.GetStream())
 						{
-							throw new ArgumentException("More than one eligible data parameter found, ImportDataParameterName must be specified");
-						}
+							Delimiters = new string[] { delimiter },
+							HasFieldsEnclosedInQuotes = true
+						};
+						cmd.Parameters[eligibleparms[0]].Value = StreamDataTable(csvReader: filecsvreader);
 					}
+					else // Stream in raw format data
+					{
+						filestreamreader = new StreamReader(fileControlBlock.GetStream());
+						cmd.Parameters[eligibleparms[0]].Value = StreamDataTable(rawReader: filestreamreader);
+					}
+				}
+				#endregion
 
-					if (importMode == "XML")
+				#region Remove any remaining parameters with null unstructured data
+				// Structured parameters cannot be null, and datasets cannot be empty; retrieve all structured data fields
+				// whose parameter value is still null, and remove from parameter collection entirely:
+				var removeparms = dataParameters
+					.Where(entry => entry.Value == SqlDbType.Structured)
+					.Select(entry => entry.Key)
+					.Where(fieldname => cmd.Parameters[fieldname].Value == DBNull.Value);
+				foreach (var removeparm in removeparms)
+				{
+					cmd.Parameters.RemoveAt(removeparm);
+				}
+				#endregion
+
+				await cmd.ExecuteNonQueryAsync();
+
+				#region Iterate through output parameters
+				int? returnValue = null;
+				int? rowsImported = null;
+				foreach (SqlParameter sqlParameter in cmd.Parameters)
+				{
+					if (sqlParameter.Direction == ParameterDirection.ReturnValue)
 					{
-						cmd.Parameters[eligibleparms[0]].Value = new SqlXml(fileControlBlock.GetStream());
+						returnValue = sqlParameter.Value as int?;
 					}
-					else if (fileControlBlock.fileInfo.Length > 0) // Ignore empty files
+					else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
 					{
-						if (importMode == "CSV") // Stream in CSV data
+						// Check for reserved values with special behavior:
+						if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
 						{
-							filecsvreader = new TextFieldParser(fileControlBlock.GetStream())
+							if (!loggerScope.ContainsKey("FileID"))
 							{
-								Delimiters = new string[] { delimiter },
-								HasFieldsEnclosedInQuotes = true
-							};
-							cmd.Parameters[eligibleparms[0]].Value = StreamDataTable(csvReader: filecsvreader);
-						}
-						else // Stream in raw format data
-						{
-							filestreamreader = new StreamReader(fileControlBlock.GetStream());
-							cmd.Parameters[eligibleparms[0]].Value = StreamDataTable(rawReader: filestreamreader);
-						}
-					}
-					#endregion
-
-					#region Remove any remaining parameters with null unstructured data
-					// Structured parameters cannot be null, and datasets cannot be empty; retrieve all structured data fields
-					// whose parameter value is still null, and remove from parameter collection entirely:
-					var removeparms = dataParameters
-						.Where(entry => entry.Value == SqlDbType.Structured)
-						.Select(entry => entry.Key)
-						.Where(fieldname => cmd.Parameters[fieldname].Value == DBNull.Value);
-					foreach (var removeparm in removeparms)
-					{
-						cmd.Parameters.RemoveAt(removeparm);
-					}
-					#endregion
-
-					await cmd.ExecuteNonQueryAsync();
-
-					#region Iterate through output parameters
-					int? returnValue = null;
-					int? rowsImported = null;
-					foreach (SqlParameter sqlParameter in cmd.Parameters)
-					{
-						if (sqlParameter.Direction == ParameterDirection.ReturnValue)
-						{
-							returnValue = sqlParameter.Value as int?;
-						}
-						else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
-						{
-							// Check for reserved values with special behavior:
-							if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
-							{
-								if (!loggerScope.ContainsKey("FileID"))
-								{
-									// Update logging scope so subsequent logging for this block will include this value:
-									loggerScope["FileID"] = sqlParameter.Value;
-									fileControlBlock.SetLoggerScope(logger, loggerScope);
-								}
+								// Update logging scope so subsequent logging for this block will include this value:
+								loggerScope["FileID"] = sqlParameter.Value;
+								fileControlBlock.SetLoggerScope(logger, loggerScope);
 							}
-							else if (sqlParameter.ParameterName.Equals("@ROWSIMPORTED", StringComparison.OrdinalIgnoreCase))
-							{
-								rowsImported = sqlParameter.Value as int?;
-							}
-
-							// Save value in output collection (as object, converting DBNull to null):
-							outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
 						}
-					}
-					#endregion
+						else if (sqlParameter.ParameterName.Equals("@ROWSIMPORTED", StringComparison.OrdinalIgnoreCase))
+						{
+							rowsImported = sqlParameter.Value as int?;
+						}
 
-					// Validate return code:
-					if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
-					{
-						logger.LogWarning(rowsImported == null ? $"Import returned non-standard value {returnValue}, proceeding"
-							: $"Import returned non-standard value {returnValue} with {rowsImported} rows imported, proceeding");
+						// Save value in output collection (as object, converting DBNull to null):
+						outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
 					}
-					else if (returnValue != 0) // Any other non-zero value (including null) will abort process
-					{
-						throw new Exception($"Invalid return value ({returnValue})");
-					}
-					else
-					{
-						logger.LogInformation(rowsImported == null ? "Import complete" : $"Import complete, {rowsImported} rows imported");
-					}
+				}
+				#endregion
+
+				// Validate return code:
+				if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
+				{
+					logger.LogWarning(rowsImported == null ? $"Import returned non-standard value {returnValue}, proceeding"
+						: $"Import returned non-standard value {returnValue} with {rowsImported} rows imported, proceeding");
+				}
+				else if (returnValue != 0) // Any other non-zero value (including null) will abort process
+				{
+					throw new Exception($"Invalid return value ({returnValue})");
+				}
+				else
+				{
+					logger.LogInformation(rowsImported == null ? "Import complete" : $"Import complete, {rowsImported} rows imported");
 				}
 			}
 			catch (Exception ex)
@@ -704,54 +703,52 @@ namespace fiQ.TaskAdapters
 				#region Execute post-processor
 				try
 				{
-					using (var cmd = new SqlCommand(importPostProcessorName, cnn) { CommandType = CommandType.StoredProcedure })
-					using (var postproclogscope = logger.BeginScope(new Dictionary<string, object>() { ["PostProcessorProcedure"] = importPostProcessorName }))
+					await using var cmd = new SqlCommand(importPostProcessorName, cnn) { CommandType = CommandType.StoredProcedure };
+					using var postproclogscope = logger.BeginScope(new Dictionary<string, object>() { ["PostProcessorProcedure"] = importPostProcessorName });
+					// Apply timeout if configured, derive and bind parameters, execute procedure:
+					if (importPostProcessorTimeout > 0) cmd.CommandTimeout = (int)importPostProcessorTimeout;
+					await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
+					await cmd.ExecuteNonQueryAsync();
+
+					#region Iterate through output parameters
+					int? returnValue = null;
+					foreach (SqlParameter sqlParameter in cmd.Parameters)
 					{
-						// Apply timeout if configured, derive and bind parameters, execute procedure:
-						if (importPostProcessorTimeout > 0) cmd.CommandTimeout = (int)importPostProcessorTimeout;
-						await DeriveAndBindParameters(cmd, fileControlBlock, outputParameters);
-						await cmd.ExecuteNonQueryAsync();
-
-						#region Iterate through output parameters
-						int? returnValue = null;
-						foreach (SqlParameter sqlParameter in cmd.Parameters)
+						if (sqlParameter.Direction == ParameterDirection.ReturnValue)
 						{
-							if (sqlParameter.Direction == ParameterDirection.ReturnValue)
+							returnValue = sqlParameter.Value as int?;
+						}
+						else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
+						{
+							// Check for reserved values with special behavior:
+							if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
 							{
-								returnValue = sqlParameter.Value as int?;
-							}
-							else if (sqlParameter.Direction.HasFlag(ParameterDirection.Output))
-							{
-								// Check for reserved values with special behavior:
-								if (sqlParameter.ParameterName.Equals("@FILEID", StringComparison.OrdinalIgnoreCase))
+								if (!loggerScope.ContainsKey("FileID"))
 								{
-									if (!loggerScope.ContainsKey("FileID"))
-									{
-										// Update logging scope so subsequent logging for this block will include this value:
-										loggerScope["FileID"] = sqlParameter.Value;
-										fileControlBlock.SetLoggerScope(logger, loggerScope);
-									}
-
-									// Save value in output collection (as object, converting DBNull to null):
-									outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
+									// Update logging scope so subsequent logging for this block will include this value:
+									loggerScope["FileID"] = sqlParameter.Value;
+									fileControlBlock.SetLoggerScope(logger, loggerScope);
 								}
+
+								// Save value in output collection (as object, converting DBNull to null):
+								outputParameters[sqlParameter.ParameterName] = sqlParameter.Value == DBNull.Value ? null : sqlParameter.Value;
 							}
 						}
-						#endregion
+					}
+					#endregion
 
-						// Validate return code:
-						if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
-						{
-							logger.LogWarning($"Post-processor returned non-standard value {returnValue}");
-						}
-						else if (returnValue != 0) // Any other non-zero value (including null) will abort process
-						{
-							throw new Exception($"Invalid return value ({returnValue})");
-						}
-						else
-						{
-							logger.LogDebug("Post-processor complete");
-						}
+					// Validate return code:
+					if (returnValue > 0 && returnValue < 100) // Values 1-99 are reserved for warnings, will not halt import process
+					{
+						logger.LogWarning($"Post-processor returned non-standard value {returnValue}");
+					}
+					else if (returnValue != 0) // Any other non-zero value (including null) will abort process
+					{
+						throw new Exception($"Invalid return value ({returnValue})");
+					}
+					else
+					{
+						logger.LogDebug("Post-processor complete");
 					}
 				}
 				catch (Exception ex)

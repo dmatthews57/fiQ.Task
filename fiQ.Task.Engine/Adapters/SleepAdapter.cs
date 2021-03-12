@@ -12,7 +12,7 @@ namespace fiQ.TaskAdapters
 	public class SleepAdapter : TaskAdapter
 	{
 		#region Fields and constructors
-		public SleepAdapter(IConfiguration _config, ILogger<SetParmAdapter> _logger, string taskName = null)
+		public SleepAdapter(IConfiguration _config, ILogger<SleepAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) { }
 		#endregion
 

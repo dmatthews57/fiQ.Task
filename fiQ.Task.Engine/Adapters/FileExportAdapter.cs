@@ -1,14 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
 using System.Data.SqlTypes;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using fiQ.TaskAdapters.FileExport;
 using fiQ.TaskModels;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -34,7 +35,6 @@ namespace fiQ.TaskAdapters
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		private OutputColumnTemplateListSet outputColumnListSet = null;
 
-		private static readonly Regex stringFormatRegex = new Regex(@"^[^{]*{0(,-?\d+)?(:.+)?}[^{]*$"); // string.Format style with single argument and optional formatting
 		private static readonly Regex qualifiedStringRegex = new Regex("^\".*\"$"); // String is already wrapped in double-quotes
 		private static readonly Regex quoteEscapeRegex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
 
@@ -115,7 +115,7 @@ namespace fiQ.TaskAdapters
 				#endregion
 
 				// Open database connection
-				using (var cnn = new SqlConnection(connectionString))
+				await using (var cnn = new SqlConnection(connectionString))
 				{
 					await cnn.OpenAsync();
 
@@ -142,7 +142,7 @@ namespace fiQ.TaskAdapters
 							DeriveAndBindParameters(cmd);
 
 							#region Execute procedure and read results into queue
-							using (var dr = await cmd.ExecuteReaderAsync())
+							await using (var dr = await cmd.ExecuteReaderAsync())
 							{
 								while (await dr.ReadAsync())
 								{
@@ -351,13 +351,13 @@ namespace fiQ.TaskAdapters
 			var outputParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
 			#region Execute export procedure to populate dataset and output collection
-			using (var cmd = new SqlCommand(exportProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
+			await using (var cmd = new SqlCommand(exportProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
 			{
 				if (exportProcedureTimeout > 0) cmd.CommandTimeout = (int)exportProcedureTimeout;
 
 				DeriveAndBindParameters(cmd);
 
-				using (var dr = await cmd.ExecuteReaderAsync())
+				await using (var dr = await cmd.ExecuteReaderAsync())
 				{
 					// If stored procedure did not output any result sets, there will be no fields in reader;
 					// otherwise iterate through all results in set and populate DataSet (note: all of this logic
@@ -701,173 +701,6 @@ namespace fiQ.TaskAdapters
 			{
 				return value.ToString();
 			}
-		}
-		#endregion
-
-		#region Private class definitions - Output column control
-		public enum Format
-		{
-			Exclude,	// Exclude this column from output
-			Auto,		// Dynamically format columns into strings based on column type
-			Raw,		// Dump column values directly to file using ToString
-			Explicit	// Use string.Format(FormatString) or [cell].ToString(FormatString) to generate output
-		};
-
-		/// <summary>
-		/// Configuration template for container class detailing explicit output behavior for a
-		/// single column from result set
-		/// </summary>
-		private class OutputColumnTemplate
-		{
-			#region Fields
-			/// <summary>
-			/// Name of column in dataset output by stored procedure
-			/// </summary>
-			public string ColumnName { get; init; }
-			/// <summary>
-			/// Optional replacement value for column header in output file
-			/// </summary>
-			public string OutputNameOverride { get; init; } = null;
-			/// <summary>
-			/// Method of formatting data to file
-			/// </summary>
-			public Format FormatMethod { get; init; } = Format.Auto;
-			/// <summary>
-			/// Format string for Explicit formatting method
-			/// </summary>
-			public string FormatString { get; init; } = null;
-			#endregion
-
-			#region Methods
-			public bool IsInvalid()
-			{
-				// ColumnName is always required (to match up with dataset column name):
-				if (string.IsNullOrEmpty(ColumnName))
-				{
-					return true;
-				}
-				// If formatting is being done explicitly, format string is required:
-				else if (FormatMethod == Format.Explicit)
-				{
-					if (string.IsNullOrEmpty(FormatString)) return true;
-					else if (!stringFormatRegex.IsMatch(FormatString)) return true;
-				}
-				// Otherwise, column is valid output:
-				return false;
-			}
-			#endregion
-		}
-
-		/// <summary>
-		/// Collection class for a set of OutputColumnTemplate lists (each corresponding to a
-		/// result set from export stored procedure), or single shared list (for all result sets)
-		/// </summary>
-		private class OutputColumnTemplateListSet
-		{
-			#region Fields
-			/// <summary>
-			/// List of OutputColumnTemplate lists (each entry in outer list is for a specific
-			/// result set, each entry in inner list is for a column within that result set)
-			/// </summary>
-			public List<List<OutputColumnTemplate>> ColumnListSet { get; init; } = null;
-			#endregion
-
-			#region Methods
-			/// <summary>
-			/// Retrieve column listing for the dataset at the specified ordinal
-			/// </summary>
-			public List<OutputColumnTemplate> GetOutputColumnList(int dataset)
-			{
-				// If no column data has been loaded, throw exception:
-				if (ColumnListSet.Count == 0)
-				{
-					throw new InvalidOperationException($"Column list requested for dataset {dataset}, none available");
-				}
-				// If there is only one column data list available, the same output configuration
-				// will be shared for all output files from this export:
-				else if (ColumnListSet.Count == 1)
-				{
-					return ColumnListSet[0];
-				}
-
-				// Otherwise, return requested column configuration set (so long as it is within range):
-				return dataset < ColumnListSet.Count ? ColumnListSet[dataset]
-					: throw new InvalidOperationException($"Column list requested for dataset {dataset}, only {ColumnListSet.Count - 1} available");
-			}
-			/// <summary>
-			/// Ensure that at least one output column list (with at least one valid output column) has been
-			/// loaded, and that there are no invalid entries in any loaded list
-			/// </summary>
-			/// <returns></returns>
-			public OutputColumnTemplateListSet EnsureValid()
-			{
-				// If column lists have not been loaded, throw exception:
-				if ((ColumnListSet?.Count ?? 0) == 0)
-				{
-					throw new ArgumentException("Output column configuration is present, but no column data loaded");
-				}
-
-				var validationerrors = new List<Exception>();
-				bool columnsfound = false;
-
-				// Iterate through column lists, removing excluded columns (which may have been included in
-				// configuration to prevent IConfiguration from ignoring them entirely) and validating:
-				for (int i = 0; i < ColumnListSet.Count; ++i)
-				{
-					ColumnListSet[i].RemoveAll(column => column.FormatMethod == Format.Exclude);
-					if (ColumnListSet[i].Count > 0)
-					{
-						columnsfound = true; // Flag that there is at least one non-empty list
-						if (ColumnListSet[i].Any(column => column.IsInvalid()))
-						{
-							validationerrors.Add(new Exception($"Column list for dataset {i} includes invalid entries"));
-						}
-					}
-				}
-
-				// Ensure at least one of the loaded lists include columns:
-				if (!columnsfound)
-				{
-					validationerrors.Add(new ArgumentException("Output column configuration is present, but no column lists include output columns"));
-				}
-
-				// If exceptions were added to collection, throw now (otherwise assume we are good):
-				return validationerrors.Count > 0 ? throw new AggregateException(validationerrors) : this;
-			}
-			#endregion
-		}
-
-		/// <summary>
-		/// Container class for explicit output behavior of the column at the specified Ordinal (built
-		/// from metadata of actual result set, combined with OutputColumnTemplate if present)
-		/// </summary>
-		private class OutputColumnBound
-		{
-			#region Fields
-			public string ColumnName { get; init; }
-			public int Ordinal { get; init; }
-			public Type ColumnType { get; init; }
-			public Type ProviderType { get; init; }
-			public Format FormatMethod { get; init; }
-			public string FormatString { get; init; }
-			#endregion
-		}
-		#endregion
-
-		#region Private class definitions - Misc
-		/// <summary>
-		/// Container class for a file ready to be exported, as returned by queue check procedure
-		/// </summary>
-		private class QueuedFile
-		{
-			/// <summary>
-			/// FileID value for this specific file (if NULL, default/parameter value will be used)
-			/// </summary>
-			public int? FileID { get; init; } = null;
-			/// <summary>
-			/// Optional Subfolder (under configured destination folder) for file output
-			/// </summary>
-			public string Subfolder { get; init; } = null;
 		}
 		#endregion
 	}

@@ -25,22 +25,23 @@ namespace fiQ.TaskAdapters
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
 			var result = new TaskResult();
+			var dateTimeNow = DateTime.Now; // Use single value throughout for consistency in macro replacements
 			try
 			{
 				#region Retrieve task parameters
 				// Retrieve and validate required parameters first:
-				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, DateTime.Now);
-				string filenameFilter = parameters.GetString("FilenameFilter");
-				var maxAge = parameters.Get<TimeSpan>("maxAge", TimeSpan.TryParse);
+				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string filenameFilter = parameters.GetString("FilenameFilter", null, dateTimeNow);
+				var maxAge = parameters.Get<TimeSpan>("MaxAge", TimeSpan.TryParse);
 				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter) || maxAge == null)
 				{
 					throw new ArgumentException("Missing or invalid: one or more of SourceFolder/FilenameFilter/MaxAge");
 				}
 				// Ignore sign on TimeSpan value (allow time to be specified either way):
-				var minLastWriteTime = DateTime.Now.Add((TimeSpan)(maxAge?.TotalMilliseconds > 0 ? maxAge?.Negate() : maxAge));
+				var minLastWriteTime = dateTimeNow.Add((TimeSpan)(maxAge?.TotalMilliseconds > 0 ? maxAge?.Negate() : maxAge));
 
 				// Retrieve optional parameters (general):
-				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"));
+				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"), RegexOptions.IgnoreCase);
 				bool recurseFolders = parameters.GetBool("RecurseFolders");
 
 				// Retrieve optional archive parameters (indicating files should be zipped up prior to deletion); we will
@@ -55,7 +56,7 @@ namespace fiQ.TaskAdapters
 					}
 				}
 				string archiveSubfolder = string.IsNullOrEmpty(archiveFolder) ? null : parameters.GetString("ArchiveSubfolder");
-				var archiveRenameRegex = string.IsNullOrEmpty(archiveFolder) ? null : TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"));
+				var archiveRenameRegex = string.IsNullOrEmpty(archiveFolder) ? null : TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"), RegexOptions.IgnoreCase);
 				string archiveRenameReplacement = archiveRenameRegex == null ? null : (parameters.GetString("ArchiveRenameReplacement") ?? string.Empty);
 
 				// Ensure sourceFolder ends with trailing slash, for proper relative paths in recursive folders:

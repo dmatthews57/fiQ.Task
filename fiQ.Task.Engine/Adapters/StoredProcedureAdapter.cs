@@ -1,10 +1,10 @@
 ﻿using System;
 using System.Data;
-using System.Data.SqlClient;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using fiQ.TaskModels;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -47,13 +47,13 @@ namespace fiQ.TaskAdapters
 				#endregion
 
 				#region Open database connection and execute procedure
-				using (var cnn = new SqlConnection(connectionString))
+				await using (var cnn = new SqlConnection(connectionString))
 				{
 					await cnn.OpenAsync();
 					// Capture console messages into StringBuilder:
 					cnn.InfoMessage += (object obj, SqlInfoMessageEventArgs e) => { consoleOutput.AppendLine(e.Message); };
 
-					using (var cmd = new SqlCommand(storedProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
+					await using (var cmd = new SqlCommand(storedProcedureName, cnn) { CommandType = CommandType.StoredProcedure })
 					{
 						if (dbTimeout > 0) cmd.CommandTimeout = (int)dbTimeout;
 

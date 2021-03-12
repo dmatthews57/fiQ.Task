@@ -28,16 +28,17 @@ namespace fiQ.TaskAdapters
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
 			var result = new TaskResult();
+			var dateTimeNow = DateTime.Now; // Use single value throughout for consistency in macro replacements
 			try
 			{
 				#region Retrieve task parameters
-				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, DateTime.Now);
-				string filenameFilter = parameters.GetString("FilenameFilter");
+				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string filenameFilter = parameters.GetString("FilenameFilter", null, dateTimeNow);
 				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter))
 				{
 					throw new ArgumentException("Missing SourceFolder and/or FilenameFilter");
 				}
-				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"));
+				var filenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FilenameRegex"), RegexOptions.IgnoreCase);
 				bool recurseFolders = parameters.GetBool("RecurseFolders");
 
 				// If custom regex not specified, create one from file filter (this check is performed to avoid false-positives on 8.3 version of filenames):
