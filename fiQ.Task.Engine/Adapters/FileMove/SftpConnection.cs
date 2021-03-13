@@ -11,8 +11,8 @@ namespace fiQ.TaskAdapters.FileMove
 	class SftpConnection : Connection
 	{
 		#region Fields
-		private Uri uri = null;
 		private SftpClient sftpClient = null;
+		private string basepath = null;
 		private bool disposed = false;
 		#endregion
 
@@ -40,7 +40,21 @@ namespace fiQ.TaskAdapters.FileMove
 			{
 				throw new ArgumentException("SFTP UserID required");
 			}
-			uri = new Uri(config.location);
+
+			// Create URL for destination location and save scrubbed base path, removing leading slash so path is by default
+			// relative to home folder - note URI can still be configured with "//" after hostname in order to force path from
+			// root folder, if required (i.e. sftp://hostname/relativetohome vs sftp://hostname//relativetoroot"):
+			var uri = new Uri(config.location);
+			basepath = ScrubPath(uri.AbsolutePath);
+			if (basepath.StartsWith('/'))
+			{
+				basepath = basepath[1..];
+			}
+			// Unless basepath is empty, ensure it ends with forward slash:
+			if (!string.IsNullOrEmpty(basepath) && !basepath.EndsWith('/'))
+			{
+				basepath += "/";
+			}
 
 			PrivateKeyFile privateKeyFile = null;
 			var methods = new AuthenticationMethod[1];
@@ -73,19 +87,6 @@ namespace fiQ.TaskAdapters.FileMove
 					disposable.Dispose();
 				}
 			}
-
-			// If base path includes a subfolder, change directory now:
-			var ap = uri.AbsolutePath;
-			if (ap.StartsWith("/"))
-			{
-				// Remove leading slash so path is by default relative to home folder - URI can be configured with "//" in order
-				// to force path from root folder, if required (i.e. sftp://host/relativetohome vs sftp://host//relativetoroot")
-				ap = ap[1..];
-			}
-			if (!string.IsNullOrEmpty(ap))
-			{
-				sftpClient.ChangeDirectory(ap);
-			}
 		}
 		/// <summary>
 		/// Disconnection function - gracefully disconnect from server, if connected
@@ -110,63 +111,81 @@ namespace fiQ.TaskAdapters.FileMove
 			var fileset = new HashSet<DownloadFile>();
 			foreach (var path in paths)
 			{
-				// Construct Regex for filename filter (required), and for filename regex (optional):
-				var fileFilterRegex = TaskUtilities.General.RegexFromFileFilter(path.FilenameFilter);
-				var fileNameRegex = TaskUtilities.General.RegexIfPresent(path.FilenameRegex, RegexOptions.IgnoreCase);
+				string subfolderPath = GetSubfolderPath(path.FolderPath);
+				if (string.IsNullOrEmpty(subfolderPath) || sftpClient.Exists(subfolderPath))
+				{
+					// Construct Regex for filename filter (required), and for filename regex (optional):
+					var fileFilterRegex = TaskUtilities.General.RegexFromFileFilter(path.FilenameFilter);
+					var fileNameRegex = TaskUtilities.General.RegexIfPresent(path.FilenameRegex, RegexOptions.IgnoreCase);
 
-				fileset.UnionWith(
-					// Search current path if no subfolder specified, ignore leading "/" in subfolder, if present:
-					sftpClient.ListDirectory(string.IsNullOrEmpty(path.FolderPath) ? "." : (path.FolderPath.StartsWith('/') ? path.FolderPath.Substring(1) : path.FolderPath))
-						.Where(sf =>
-							sf.IsDirectory == false
-							&& fileFilterRegex.IsMatch(sf.Name)
-							&& (fileNameRegex == null ? true : fileNameRegex.IsMatch(sf.Name))
-						)
-						.Select(sf => new DownloadFile(path)
-						{
-							fileName = sf.Name,
-							lastWriteTime = sf.LastWriteTime,
-							size = sf.Length
-						})
-				);
+					fileset.UnionWith(
+						// Search current path if no subfolder specified:
+						sftpClient.ListDirectory(string.IsNullOrEmpty(subfolderPath) ? "." : subfolderPath)
+							.Where(sf =>
+								sf.IsDirectory == false
+								&& fileFilterRegex.IsMatch(sf.Name)
+								&& (fileNameRegex == null ? true : fileNameRegex.IsMatch(sf.Name))
+							)
+							.Select(sf => new DownloadFile
+							{
+								// Note that actual server path (including forward slash) is replacing configured FolderPath
+								// value here - so later operations can just use it directly without re-evaluating:
+								fileFolder = subfolderPath,
+								fileName = sf.Name,
+								lastWriteTime = sf.LastWriteTime,
+								size = sf.Length,
+								DestinationSubfolder = path.DestinationSubfolder
+							})
+					);
+				}
 			}
 			return fileset;
 		}
 		/// <summary>
 		/// Open writable stream for specified destination file
 		/// </summary>
-		public override Stream GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
+		public override StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
 		{
-			string destPath = fileName;
+			// Ensure base folder (if any) exists:
+			if (!string.IsNullOrEmpty(basepath))
+			{
+				if (!sftpClient.Exists(basepath))
+				{
+					sftpClient.CreateDirectory(basepath);
+				}
+			}
+			// Ensure subfolder (if any) exists:
 			if (!string.IsNullOrEmpty(folderPath))
 			{
-				// If subfolder does not exist, create now:
-				folderPath = ScrubPath(folderPath);
 				if (!sftpClient.Exists(folderPath))
 				{
 					sftpClient.CreateDirectory(folderPath);
 				}
-
-				// Combine path with filename (adding trailing '/' to path, if required):
-				destPath = $"{folderPath}{fileName}";
 			}
 
-			// Handle existing file, if not overwriting:
+			// Set full destination file path (note that folderPath will have been set to a directly-usable value
+			// by GetFileList, when it originally evaluated path) and handle existing file, if not overwriting:
+			string destPath = $"{folderPath}{fileName}";
 			if (preventOverwrite)
 			{
 				destPath = GetNextFilename(destPath);
 			}
 
 			// Open write stream to destination path and return:
-			return sftpClient.OpenWrite(destPath);
+			return new StreamPath
+			{
+				stream = sftpClient.OpenWrite(destPath),
+				path = destPath
+			};
 		}
 		/// <summary>
 		/// Perform transfer of data from file at specified path to destination stream
 		/// </summary>
 		public override async Task DoTransfer(string folderPath, string fileName, Stream writestream)
 		{
-			// Open read stream to source file:
-			using var readstream = sftpClient.OpenRead($"{ScrubPath(folderPath)}{fileName}");
+			// Open read stream to source file (note that folderPath will have been set to a directly-usable
+			// value by GetFileList, when it originally evaluated path):
+			using var readstream = sftpClient.OpenRead($"{folderPath}{fileName}");
 
 			if (config.PGP)
 			{
@@ -188,34 +207,47 @@ namespace fiQ.TaskAdapters.FileMove
 		/// </summary>
 		public override void RenameFile(string folderPath, string fileName, string newFileName)
 		{
-			folderPath = ScrubPath(folderPath);
-			sftpClient.RenameFile($"{folderPath}{fileName}", $"{folderPath}{fileName}");
+			// Note that folderPath will have been set to a directly-usable value by GetFileList
+			//sftpClient.RenameFile($"{folderPath}{fileName}", $"{folderPath}{newFileName}");
 		}
 		/// <summary>
 		/// Delete specified file
 		/// </summary>
 		public override void DeleteFile(string folderPath, string fileName)
 		{
-			sftpClient.DeleteFile($"{ScrubPath(folderPath)}{fileName}");
+			//sftpClient.DeleteFile($"{folderPath}{fileName}");
 		}
 		#endregion
 
 		#region Private methods
 		/// <summary>
-		/// Standardize subfolder path for use in other functions
+		/// Standardize folder path format
 		/// </summary>
 		private static string ScrubPath(string path)
 		{
-			if (!string.IsNullOrEmpty(path))
+			// Clear whitespace, ensure all slashes are forward, replace null with string.Empty
+			return string.IsNullOrWhiteSpace(path) ? string.Empty : path.Trim().Replace('\\', '/');
+		}
+
+		/// <summary>
+		/// Build (and properly format) absolute path of specified subfolder
+		/// </summary>
+		private string GetSubfolderPath(string subfolder)
+		{
+			subfolder = ScrubPath(subfolder);
+
+			// If no subfolder specified, just return basepath (guaranteed to be blank or end in "/")
+			if (string.IsNullOrEmpty(subfolder))
 			{
-				path = path.Replace('\\', '/'); // Ensure all slashes are forward
-				if (path.StartsWith('/')) // Ignore leading slash
-				{
-					path = path.Substring(1);
-				}
-				return path.EndsWith('/') ? path : $"{path}/"; // Ensure result has trailing slash
+				return basepath;
 			}
-			return path;
+			// If subfolder indicates an absolute path or there is no basepath, just return subfolder (ensuring trailing slash):
+			else if (subfolder.StartsWith('/') || string.IsNullOrEmpty(basepath))
+			{
+				return subfolder.EndsWith('/') ? subfolder : subfolder + "/";
+			}
+			// Otherwise, we have both a basepath and a non-absolute-path subfolder - combine and return (ensuring trailing slash):
+			return subfolder.EndsWith('/') ? basepath + subfolder : basepath + subfolder + "/";
 		}
 
 		/// <summary>

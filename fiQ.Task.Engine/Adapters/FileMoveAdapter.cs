@@ -92,6 +92,20 @@ namespace fiQ.TaskAdapters
 				{
 					sourceFileRenameReplacement = parameters.GetString("SourceFileRenameReplacement", null, dateTimeNow) ?? string.Empty;
 				}
+
+				// Check for illogical configurations:
+				if (preventOverwrite && fileRenameDefer)
+				{
+					// Deferred rename occurs at remote site; with preventOverwrite on, original file may be uploaded under another name
+					// (meaning rename will fail), and final filename will not be checked in advance:
+					throw new ArgumentException("PreventOverwrite and FileRenameDefer options cannot be used together");
+				}
+				else if (!copyFileOnly && sourceFileRenameRegex != null)
+				{
+					// If CopyFileOnly is not set, source file will be deleted (and thus cannot be renamed); raise error to ensure that
+					// unintended behavior does not occur (allow opportunity to correct configuration)
+					throw new ArgumentException("SourceFileRenameRegex cannot be used unless CopyFileOnly is set");
+				}
 				#endregion
 
 				#region If download listing is configured, open and read
@@ -148,33 +162,45 @@ namespace fiQ.TaskAdapters
 							try
 							{
 								#region Perform file transfer
-								// Request write stream from destination object (applying file rename, if appropriate):
+								// Apply file rename, if appropriate:
 								string destFileName = (fileRenameRegex == null || fileRenameDefer) ? file.fileName : fileRenameRegex.Replace(file.fileName, fileRenameReplacement);
 								logger.LogDebug($"File will be transferred to {(string.IsNullOrEmpty(file.DestinationSubfolder) ? destFileName : Path.Combine(file.DestinationSubfolder, destFileName))}");
-								using var deststream = destConnection.GetWriteStream(file.DestinationSubfolder, destFileName, preventOverwrite);
-								if (destConnectionConfig.PGP)
-								{
-									// Destination requires PGP encryption - open public key file, create encrypting stream around destination stream:
-									using var publickeystream = new FileStream(destConnectionConfig.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
-									using var encstream = destConnectionConfig.pgpRawFormat ? TaskUtilities.Pgp.GetEncryptionStreamRaw(publickeystream, destConnectionConfig.pgpUserID, deststream)
-										: TaskUtilities.Pgp.GetEncryptionStream(publickeystream, destConnectionConfig.pgpUserID, deststream);
 
-									// Order source connection to write data from specified file into encrypting stream:
-									await sourceConnection.DoTransfer(file.fileFolder, file.fileName, encstream.GetStream());
-								}
-								else
+								// If simple copy method supported by this source/dest combination, perform now:
+								if (destConnection.SupportsSimpleCopy(sourceConnection))
 								{
-									// No encryption required - order source connection to write data from specified file into destination stream:
-									await sourceConnection.DoTransfer(file.fileFolder, file.fileName, deststream);
+									string destPath = destConnection.DoSimpleCopy(sourceConnection, file.fileFolder, file.fileName, file.DestinationSubfolder, destFileName, preventOverwrite);
+									logger.LogInformation("File transferred (using simple copy) to {DestFilePath}", destPath);
 								}
-								logger.LogInformation($"File transferred to {(string.IsNullOrEmpty(file.DestinationSubfolder) ? destFileName : Path.Combine(file.DestinationSubfolder, destFileName))}");
+								else // Non-folder source/destination or PGP encryption/decryption required
+								{
+									// Request write stream from destination object:
+									using var deststream = destConnection.GetWriteStream(file.DestinationSubfolder, destFileName, preventOverwrite);
+									if (destConnectionConfig.PGP)
+									{
+										// Destination requires PGP encryption - open public key file, create encrypting stream around destination stream:
+										using var publickeystream = new FileStream(destConnectionConfig.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
+										using var encstream = destConnectionConfig.pgpRawFormat ?
+											TaskUtilities.Pgp.GetEncryptionStreamRaw(publickeystream, destConnectionConfig.pgpUserID, deststream.stream)
+											: TaskUtilities.Pgp.GetEncryptionStream(publickeystream, destConnectionConfig.pgpUserID, deststream.stream);
+
+										// Order source connection to write data from specified file into encrypting stream:
+										await sourceConnection.DoTransfer(file.fileFolder, file.fileName, encstream.GetStream());
+									}
+									else
+									{
+										// No encryption required - order source connection to write data from specified file into destination stream:
+										await sourceConnection.DoTransfer(file.fileFolder, file.fileName, deststream.stream);
+									}
+									logger.LogInformation("File transferred to {DestFilePath}", deststream.path);
+								}
 
 								// If file rename deferred, perform now:
 								if (fileRenameDefer)
 								{
 									var renameFile = fileRenameRegex.Replace(destFileName, fileRenameReplacement);
 									destConnection.RenameFile(file.DestinationSubfolder, destFileName, renameFile);
-									logger.LogDebug($"File renamed at destination to {renameFile}");
+									logger.LogInformation("File renamed at destination to {DestFilePath}", renameFile);
 								}
 								#endregion
 

@@ -35,7 +35,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// Only relevant for files to be downloaded
 		/// </remarks>
 		[JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-		public string DestinationSubfolder { get; } = null;
+		public string DestinationSubfolder { get; init; } = null;
 
 		/// <summary>
 		/// Date file was downloaded (serialized but not part of hash)
@@ -44,23 +44,6 @@ namespace fiQ.TaskAdapters.FileMove
 		/// Only relevant for files that have already been downloaded
 		/// </remarks>
 		public DateTime downloadedAt { get; } = DateTime.Now;
-		#endregion
-
-		#region Constructors
-		/// <summary>
-		/// Default constructor
-		/// </summary>
-		public DownloadFile()
-		{
-		}
-		/// <summary>
-		/// Constructor using source folder path to set property values
-		/// </summary>
-		public DownloadFile(SourceFilePath sourceFilePath)
-		{
-			DestinationSubfolder = sourceFilePath.DestinationSubfolder;
-			fileFolder = sourceFilePath.FolderPath;
-		}
 		#endregion
 
 		#region IEquatable implementation and hash/equality overrides

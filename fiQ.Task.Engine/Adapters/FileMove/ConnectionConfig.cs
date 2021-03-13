@@ -48,10 +48,6 @@ namespace fiQ.TaskAdapters.FileMove
 				if (REGEX_SFTP_SERVER.IsMatch(location))
 				{
 					locationType = LocationType.SFTP;
-					if (!location.EndsWith('/')) // Ensure URI ends with forward slash
-					{
-						location += "/";
-					}
 				}
 				else if (REGEX_FTP_SERVER.IsMatch(location))
 				{

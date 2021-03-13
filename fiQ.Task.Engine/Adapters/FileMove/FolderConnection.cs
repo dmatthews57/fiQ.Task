@@ -45,8 +45,10 @@ namespace fiQ.TaskAdapters.FileMove
 					Directory.EnumerateFiles(string.IsNullOrEmpty(path.FolderPath) ? config.location : Path.Combine(config.location, path.FolderPath), path.FilenameFilter)
 						.Where(fileName => filenameRegex.IsMatch(Path.GetFileName(fileName)))
 						.Select(fileName => new FileInfo(fileName))
-						.Select(fileInfo => new DownloadFile(path)
+						.Select(fileInfo => new DownloadFile
 						{
+							DestinationSubfolder = path.DestinationSubfolder,
+							fileFolder = path.FolderPath,
 							fileName = fileInfo.Name,
 							lastWriteTime = fileInfo.LastWriteTime,
 							size = fileInfo.Length
@@ -58,7 +60,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Open writable stream for specified destination file
 		/// </summary>
-		public override Stream GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
+		public override StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
 		{
 			// Ensure destination base folder exists:
 			string destPath = config.location;
@@ -83,8 +85,12 @@ namespace fiQ.TaskAdapters.FileMove
 				destPath = GetNextFilename(destPath);
 			}
 
-			// Return FileStream object writing to specified destination path:
-			return new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+			// Return StreamPath containing FileStream object writing to specified destination path:
+			return new StreamPath
+			{
+				stream = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None),
+				path = destPath
+			};
 		}
 		/// <summary>
 		/// Perform transfer of data from file at specified path to destination stream
@@ -118,14 +124,68 @@ namespace fiQ.TaskAdapters.FileMove
 			// Combine base location and subfolder path, handle duplicate filenames, then rename:
 			folderPath = string.IsNullOrEmpty(folderPath) ? config.location : Path.Combine(config.location, folderPath);
 			string destFilePath = GetNextFilename(Path.Combine(folderPath, newFileName));
-			File.Move(Path.Combine(folderPath, fileName), destFilePath);
+			//File.Move(Path.Combine(folderPath, fileName), destFilePath);
 		}
 		/// <summary>
 		/// Delete specified file
 		/// </summary>
 		public override void DeleteFile(string folderPath, string fileName)
 		{
-			File.Delete(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName));
+			//File.Delete(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName));
+		}
+		#endregion
+
+		#region Connection implementation - Simple method file transfer
+		/// <summary>
+		/// Simple file copy operation is supported only if this object is not using PGP and source
+		/// connection is ALSO a FolderConnection which is not using PGP
+		/// </summary>
+		public override bool SupportsSimpleCopy(Connection sourceConnection)
+		{
+			return string.IsNullOrEmpty(config.pgpKeyRing) && sourceConnection is FolderConnection fc && string.IsNullOrEmpty(fc.config.pgpKeyRing);
+		}
+		/// <summary>
+		/// Perform simple file copy (no encryption) from a FolderConnection source
+		/// </summary>
+		/// <returns>Path to destination file</returns>
+		public override string DoSimpleCopy(Connection sourceConnection, string sourceFolderPath, string sourceFileName,
+			string destFolderPath, string destFileName, bool preventOverwrite)
+		{
+			if (sourceConnection is not FolderConnection sourcefc)
+			{
+				throw new InvalidOperationException("Source connection type not supported for simple copy");
+			}
+
+			// Start with destination base folder and ensure it exists:
+			string destPath = config.location;
+			if (!Directory.Exists(destPath))
+			{
+				Directory.CreateDirectory(destPath);
+			}
+			// If destination subfolder specified, add to destination path and ensure subfolder exists:
+			if (!string.IsNullOrEmpty(destFolderPath))
+			{
+				destPath = Path.Combine(destPath, destFolderPath);
+				if (!Directory.Exists(destPath))
+				{
+					Directory.CreateDirectory(destPath);
+				}
+			}
+			// Finally, add filename to destination path and handle existing file (if not overwriting):
+			destPath = Path.Combine(destPath, destFileName);
+			if (preventOverwrite)
+			{
+				destPath = GetNextFilename(destPath);
+			}
+
+			// Perform simple file copy operation, constructing source path and handling existing file, if not overwriting:
+			File.Copy(
+				string.IsNullOrEmpty(sourceFolderPath) ? Path.Combine(sourcefc.config.location, sourceFileName)
+					: Path.Combine(sourcefc.config.location, sourceFolderPath, sourceFileName),
+				 destPath, !preventOverwrite);
+
+			// Return final destination path:
+			return destPath;
 		}
 		#endregion
 
