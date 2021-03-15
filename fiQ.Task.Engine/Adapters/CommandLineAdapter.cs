@@ -17,8 +17,8 @@ namespace fiQ.TaskAdapters
 		#region Fields and constructors
 		private static readonly Regex argumentKeyRegex = new Regex(@"^Argument\d$", RegexOptions.IgnoreCase);
 
-		public CommandLineAdapter(IConfiguration _config, ILogger<CommandLineAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) { }
+		public CommandLineAdapter(IServiceProvider _isp, IConfiguration _config, ILogger<CommandLineAdapter> _logger, string taskName = null)
+			: base(_isp, _config, _logger, taskName) { }
 		#endregion
 
 		/// <summary>

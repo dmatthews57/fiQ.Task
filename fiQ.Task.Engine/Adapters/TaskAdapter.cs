@@ -13,16 +13,19 @@ namespace fiQ.TaskAdapters
 	public abstract class TaskAdapter : IDisposable
 	{
 		#region Fields and constructors
+		protected readonly IServiceProvider isp;
 		protected readonly IConfiguration config;
 		protected readonly ILogger logger;
 		private IDisposable loggerScope = null;
 		private bool disposed = false;
 
 		protected TaskAdapter(
+			IServiceProvider _isp,
 			IConfiguration _config,
 			ILogger<TaskAdapter> _logger,
 			string taskName = null)
 		{
+			isp = _isp;
 			config = _config;
 			logger = _logger;
 

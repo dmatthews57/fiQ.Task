@@ -38,11 +38,12 @@ namespace fiQ.TaskAdapters
 		private static readonly Regex qualifiedStringRegex = new Regex("^\".*\"$"); // String is already wrapped in double-quotes
 		private static readonly Regex quoteEscapeRegex = new Regex("\"?\""); // Detect double-quote, optionally preceded by double-quote (i.e. already escaped)
 
-		public FileExportAdapter(IConfiguration _config,
+		public FileExportAdapter(IServiceProvider _isp,
+			IConfiguration _config,
 			ILogger<FileExportAdapter> _logger,
 			IMemoryCache _memorycache,
 			string taskName = null)
-			: base(_config, _logger, taskName)
+			: base(_isp, _config, _logger, taskName)
 		{
 			memorycache = _memorycache;
 		}

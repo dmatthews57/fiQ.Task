@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Net.Mail;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -59,15 +60,25 @@ namespace fiQ.TaskUtilities
 
 		#region Public methods
 		/// <summary>
+		/// Method to ensure that SmtpClient has been initialized
+		/// </summary>
+		public void EnsureValid()
+		{
+			if (smtpClient == null)
+			{
+				throw new InvalidOperationException("SmtpClient not initialized (configuration may be missing)");
+			}
+		}
+
+		/// <summary>
 		/// Send simple email message
 		/// </summary>
-		public bool SendEmail(string messageSubject, string messageBody, string messageTo = null, string messageFrom = null,
+		public async Task<bool> SendEmail(string messageSubject, string messageBody, string messageTo = null, string messageFrom = null,
 			Stream attachment = null, string attachmentName = null)
 		{
-			/*
-			try // TODO: UNCOMMENT EMAIL
+			/*try // TODO: UNCOMMENT EMAIL
 			{
-				if (smtpClient == null) throw new InvalidOperationException("Client not initialized (configuration may be missing)");
+				EnsureValid();
 				using (var mailMessage = new MailMessage
 				{
 					From = new MailAddress(string.IsNullOrEmpty(messageFrom) ? options.DefaultFrom : messageFrom),
@@ -81,15 +92,18 @@ namespace fiQ.TaskUtilities
 					{
 						mailMessage.Attachments.Add(new Attachment(attachment, attachmentName));
 					}
-					smtpClient.Send(mailMessage);
+					await smtpClient.SendMailAsync(mailMessage);
 					return true;
 				}
 			}
 			catch (Exception ex)
 			{
+				if (ex is AggregateException ae)
+				{
+					ex = TaskUtilities.General.SimplifyAggregateException(ae);
+				}
 				logger.LogError(ex, "SMTP send failed");
-			}
-			*/
+			}*/
 			return false;
 		}
 		#endregion

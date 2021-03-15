@@ -9,6 +9,12 @@ namespace fiQ.TaskAdapters.FileMove
 {
 	class FolderConnection : Connection
 	{
+		#region Fields and constructor
+		public FolderConnection(ConnectionConfig _config) : base(_config)
+		{
+		}
+		#endregion
+
 		#region Connection implementation - Connection management
 		/// <summary>
 		/// Connection function - currently unused (may perform impersonation in future, if required)
@@ -24,13 +30,12 @@ namespace fiQ.TaskAdapters.FileMove
 		}
 		#endregion
 
-		#region Connection implementation - File transfer
+		#region Connection implementation - File transfer (source mode)
 		/// <summary>
 		/// Retrieve listing of downloadable files
 		/// </summary>
 		/// <param name="paths">Collection of SourceFilePaths to search</param>
-		/// <returns>HashSet of downloadable files in source paths, matching source </returns>
-		/// <remarks>Used only when this is "source" connection</remarks>
+		/// <returns>HashSet of downloadable files in source paths, matching source patterns</returns>
 		public override HashSet<DownloadFile> GetFileList(List<SourceFilePath> paths)
 		{
 			var fileset = new HashSet<DownloadFile>();
@@ -62,9 +67,40 @@ namespace fiQ.TaskAdapters.FileMove
 			return fileset;
 		}
 		/// <summary>
+		/// Perform transfer of data from file at specified path to destination stream
+		/// </summary>
+		/// <remarks>Used only when this is "source" connection</remarks>
+		public override async Task DoTransfer(string folderPath, string fileName, Stream writestream)
+		{
+			// Open read stream on source file (note that folderPath will have been set to a directly-usable
+			// value by GetFileList, when it originally evaluated path):
+			using var readstream = new FileStream(Path.Combine(folderPath, fileName), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+			if (config.PGP)
+			{
+				// Decrypt source stream contents into destination stream (base class must have initialized pgpKeyStream):
+				await TaskUtilities.Pgp.Decrypt(PGPKeyStream, config.pgpPassphrase, readstream, writestream);
+			}
+			else
+			{
+				// Do direct copy of data from read stream to write:
+				await readstream.CopyToAsync(writestream);
+			}
+		}
+		/// <summary>
+		/// Delete specified file
+		/// </summary>
+		public override void DeleteFile(string folderPath, string fileName)
+		{
+			//File.Delete(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName));
+			Console.WriteLine($"WOULD DELETE {(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName))}"); // TODO: UNCOMMENT ACTUAL DELETE
+		}
+		#endregion
+
+		#region Connection implementation - File transfer (destination mode)
+		/// <summary>
 		/// Open writable stream for specified destination file
 		/// </summary>
-		/// <remarks>Used only when this is "destination" connection</remarks>
 		public override StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
 		{
 			// Ensure destination base folder exists:
@@ -98,25 +134,10 @@ namespace fiQ.TaskAdapters.FileMove
 			};
 		}
 		/// <summary>
-		/// Perform transfer of data from file at specified path to destination stream
+		/// Perform cleanup/finalization steps on StreamPath (not required)
 		/// </summary>
-		/// <remarks>Used only when this is "source" connection</remarks>
-		public override async Task DoTransfer(string folderPath, string fileName, Stream writestream)
+		public override async Task FinalizeWrite(StreamPath streampath)
 		{
-			// Open read stream on source file (note that folderPath will have been set to a directly-usable
-			// value by GetFileList, when it originally evaluated path):
-			using var readstream = new FileStream(Path.Combine(folderPath, fileName), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-
-			if (config.PGP)
-			{
-				// Decrypt source stream contents into destination stream (base class must have initialized pgpKeyStream):
-				await TaskUtilities.Pgp.Decrypt(PGPKeyStream, config.pgpPassphrase, readstream, writestream);
-			}
-			else
-			{
-				// Do direct copy of data from read stream to write:
-				await readstream.CopyToAsync(writestream);
-			}
 		}
 		#endregion
 
@@ -130,15 +151,6 @@ namespace fiQ.TaskAdapters.FileMove
 			folderPath = string.IsNullOrEmpty(folderPath) ? config.location : Path.Combine(config.location, folderPath);
 			string destFilePath = Path.Combine(folderPath, newFileName);
 			File.Move(Path.Combine(folderPath, fileName), preventOverwrite ? GetNextFilename(destFilePath) : destFilePath);
-		}
-		/// <summary>
-		/// Delete specified file
-		/// </summary>
-		/// <remarks>Used only when this is "source" connection</remarks>
-		public override void DeleteFile(string folderPath, string fileName)
-		{
-			Console.WriteLine($"WOULD DELETE {(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName))}"); // TODO: UNCOMMENT ACTUAL DELETE
-			//File.Delete(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName));
 		}
 		#endregion
 

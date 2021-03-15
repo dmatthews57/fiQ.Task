@@ -262,7 +262,7 @@ namespace fiQ.TaskCmd
 					{
 						smtp.SendEmail($"Execution {(Environment.ExitCode == 0 ? "results" : "ERROR")} job [{jobName}] on {Environment.MachineName}",
 							$"Return code {Environment.ExitCode} at {DateTime.Now:yyyy-MM-dd HH:mm:ss}<br/><br/><pre>{logMessage}</pre>",
-							sendresultsto);
+							sendresultsto).Wait();
 					}
 				}
 				#endregion

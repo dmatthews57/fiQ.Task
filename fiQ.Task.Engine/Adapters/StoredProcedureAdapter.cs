@@ -16,8 +16,8 @@ namespace fiQ.TaskAdapters
 	public class StoredProcedureAdapter : TaskAdapter
 	{
 		#region Fields and constructors
-		public StoredProcedureAdapter(IConfiguration _config, ILogger<StoredProcedureAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) { }
+		public StoredProcedureAdapter(IServiceProvider _isp, IConfiguration _config, ILogger<StoredProcedureAdapter> _logger, string taskName = null)
+			: base(_isp, _config, _logger, taskName) { }
 		#endregion
 
 		/// <summary>

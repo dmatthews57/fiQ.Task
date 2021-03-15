@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace fiQ.TaskAdapters.FileMove
 {
@@ -10,10 +11,15 @@ namespace fiQ.TaskAdapters.FileMove
 	/// </summary>
 	internal abstract class Connection : IDisposable
 	{
-		#region Fields
-		protected ConnectionConfig config { get; init; }
+		#region Fields and constructor
+		protected ConnectionConfig config { get; }
 		private MemoryStream pgpKeyStream = null;
 		private bool disposed = false;
+
+		protected Connection(ConnectionConfig _config)
+		{
+			config = _config;
+		}
 		#endregion
 
 		#region IDisposable default implementation
@@ -34,18 +40,18 @@ namespace fiQ.TaskAdapters.FileMove
 		#endregion
 
 		#region Public static factory method
-		public static Connection CreateInstance(ConnectionConfig _config)
+		public static Connection CreateInstance(IServiceProvider _isp, ConnectionConfig _config)
 		{
 			switch (_config.locationType)
 			{
 				case ConnectionConfig.LocationType.Folder:
-					return new FolderConnection { config = _config };
+					return (Connection)ActivatorUtilities.CreateInstance(_isp, typeof(FolderConnection), _config);
 				case ConnectionConfig.LocationType.SFTP:
-					return new SftpConnection { config = _config };
+					return (Connection)ActivatorUtilities.CreateInstance(_isp, typeof(SftpConnection), _config);
 				case ConnectionConfig.LocationType.FTP:
 					break;
 				case ConnectionConfig.LocationType.Email:
-					break;
+					return (Connection)ActivatorUtilities.CreateInstance(_isp, typeof(EmailConnection), _config);
 			};
 
 			throw new ArgumentException("Invalid connection type requested");
@@ -91,15 +97,24 @@ namespace fiQ.TaskAdapters.FileMove
 		public void Disconnect() => DoDisconnect();
 		#endregion
 
-		#region Abstract methods - File transfer
+		#region Protected abstract methods - Connection management
+		protected abstract void DoConnect();
+		protected abstract void DoDisconnect();
+		#endregion
+
+		#region Abstract methods - File transfer (source mode)
 		public abstract HashSet<DownloadFile> GetFileList(List<SourceFilePath> paths);
-		public abstract StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite);
 		public abstract Task DoTransfer(string folderPath, string fileName, Stream writestream);
+		public abstract void DeleteFile(string folderPath, string fileName);
+		#endregion
+
+		#region Abstract methods - File transfer (destination mode)
+		public abstract StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite);
+		public abstract Task FinalizeWrite(StreamPath streampath);
 		#endregion
 
 		#region Abstract methods - File management
 		public abstract void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite);
-		public abstract void DeleteFile(string folderPath, string fileName);
 		#endregion
 
 		#region Virtual methods - Simple method file transfer (default not supported)
@@ -125,11 +140,6 @@ namespace fiQ.TaskAdapters.FileMove
 		{
 			throw new NotImplementedException("Simple copy not supported");
 		}
-		#endregion
-
-		#region Protected abstract methods - Connection management
-		protected abstract void DoConnect();
-		protected abstract void DoDisconnect();
 		#endregion
 	}
 }

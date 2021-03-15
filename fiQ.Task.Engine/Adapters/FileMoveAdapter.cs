@@ -16,8 +16,8 @@ namespace fiQ.TaskAdapters
 	{
 		#region Fields and constructors
 		private static readonly JsonSerializerOptions downloadListFileFormat = new JsonSerializerOptions { WriteIndented = true };
-		public FileMoveAdapter(IConfiguration _config, ILogger<FileMoveAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) {}
+		public FileMoveAdapter(IServiceProvider _isp, IConfiguration _config, ILogger<FileMoveAdapter> _logger, string taskName = null)
+			: base(_isp, _config, _logger, taskName) {}
 		#endregion
 
 		/// <summary>
@@ -139,7 +139,7 @@ namespace fiQ.TaskAdapters
 				#endregion
 
 				// Create source connection, connect and retrieve file listing
-				using (var sourceConnection = Connection.CreateInstance(sourceConnectionConfig))
+				using (var sourceConnection = Connection.CreateInstance(isp, sourceConnectionConfig))
 				{
 					sourceConnection.Connect();
 					var fileList = sourceConnection.GetFileList(sourceFilePaths);
@@ -158,7 +158,7 @@ namespace fiQ.TaskAdapters
 					if (fileList.Any())
 					{
 						#region Open destination connection and transfer files
-						using var destConnection = Connection.CreateInstance(destConnectionConfig);
+						using var destConnection = Connection.CreateInstance(isp, destConnectionConfig);
 						destConnection.Connect();
 						foreach (var file in fileList)
 						{
@@ -203,6 +203,7 @@ namespace fiQ.TaskAdapters
 										// No encryption required - order source connection to write data from specified file into destination stream:
 										await sourceConnection.DoTransfer(file.fileFolder, file.fileName, deststream.stream);
 									}
+									await destConnection.FinalizeWrite(deststream);
 									logger.LogInformation("File transferred");
 								}
 

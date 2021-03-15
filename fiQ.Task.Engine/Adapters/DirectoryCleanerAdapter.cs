@@ -14,8 +14,8 @@ namespace fiQ.TaskAdapters
 	public class DirectoryCleanerAdapter : TaskAdapter
 	{
 		#region Fields and constructors
-		public DirectoryCleanerAdapter(IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) { }
+		public DirectoryCleanerAdapter(IServiceProvider _isp, IConfiguration _config, ILogger<DirectoryCleanerAdapter> _logger, string taskName = null)
+			: base(_isp, _config, _logger, taskName) { }
 		#endregion
 
 		/// <summary>

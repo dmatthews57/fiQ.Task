@@ -18,8 +18,8 @@ namespace fiQ.TaskAdapters
 	public class FileCheckAdapter : TaskAdapter
 	{
 		#region Fields and constructors
-		public FileCheckAdapter(IConfiguration _config, ILogger<FileCheckAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) { }
+		public FileCheckAdapter(IServiceProvider _isp, IConfiguration _config, ILogger<FileCheckAdapter> _logger, string taskName = null)
+			: base(_isp, _config, _logger, taskName) { }
 		#endregion
 
 		/// <summary>

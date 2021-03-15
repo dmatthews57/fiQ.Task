@@ -14,8 +14,8 @@ namespace fiQ.TaskAdapters
 	public class SetParmAdapter : TaskAdapter
 	{
 		#region Fields and constructors
-		public SetParmAdapter(IConfiguration _config, ILogger<SetParmAdapter> _logger, string taskName = null)
-			: base(_config, _logger, taskName) { }
+		public SetParmAdapter(IServiceProvider _isp, IConfiguration _config, ILogger<SetParmAdapter> _logger, string taskName = null)
+			: base(_isp, _config, _logger, taskName) { }
 		#endregion
 
 		/// <summary>

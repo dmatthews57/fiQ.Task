@@ -45,11 +45,13 @@ namespace fiQ.TaskAdapters
 		private Regex importLineFilterRegex = null;		// If specified, only lines matching this regex will be imported ("RAW"/default mode only)
 		private Dictionary<string, string> sqlParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-		public FileImportAdapter(IConfiguration _config,
+		public FileImportAdapter(
+			IServiceProvider _isp,
+			IConfiguration _config,
 			ILogger<FileImportAdapter> _logger,
 			IMemoryCache _memorycache,
 			string taskName = null)
-			: base(_config, _logger, taskName)
+			: base(_isp, _config, _logger, taskName)
 		{
 			memorycache = _memorycache;
 		}
