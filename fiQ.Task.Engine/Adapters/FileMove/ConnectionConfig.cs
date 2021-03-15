@@ -52,12 +52,8 @@ namespace fiQ.TaskAdapters.FileMove
 				else if (REGEX_FTP_SERVER.IsMatch(location))
 				{
 					locationType = LocationType.FTP;
-					if (!location.EndsWith('/')) // Ensure URI ends with forward slash
-					{
-						location += "/";
-					}
 				}
-				else if (TaskUtilities.General.REGEX_EMAIL.IsMatch(location))
+				else if (TaskUtilities.General.REGEX_EMAIL_LIST.IsMatch(location))
 				{
 					locationType = LocationType.Email;
 				}

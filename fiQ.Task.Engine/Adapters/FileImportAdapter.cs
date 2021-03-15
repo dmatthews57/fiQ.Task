@@ -549,7 +549,7 @@ namespace fiQ.TaskAdapters
 				if (!string.IsNullOrEmpty(importPGPPrivateKeyRing))
 				{
 					using var privatekeystream = new FileStream(importPGPPrivateKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
-					fileControlBlock.OpenDecryptionStream(privatekeystream, importPGPPassphrase);
+					await fileControlBlock.OpenDecryptionStream(privatekeystream, importPGPPassphrase);
 				}
 
 				// Create and execute import command object
@@ -866,7 +866,7 @@ namespace fiQ.TaskAdapters
 				return fileHash;
 			}
 
-			public void OpenDecryptionStream(Stream privatekeysource, string privatekeypassphrase)
+			public async Task OpenDecryptionStream(Stream privatekeysource, string privatekeypassphrase)
 			{
 				// In the event decryption stream is already open (should never happen), dispose first:
 				if (decryptionstream != null)
@@ -876,7 +876,7 @@ namespace fiQ.TaskAdapters
 				}
 
 				// Open decryption stream around filestream, using provided private key data:
-				decryptionstream = TaskUtilities.Pgp.GetDecryptionStream(privatekeysource, privatekeypassphrase, filestream);
+				decryptionstream = await TaskUtilities.Pgp.GetDecryptionStream(privatekeysource, privatekeypassphrase, filestream);
 			}
 			#endregion
 		}

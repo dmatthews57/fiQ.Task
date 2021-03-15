@@ -12,6 +12,8 @@ namespace fiQ.TaskAdapters.FileMove
 	{
 		#region Fields
 		protected ConnectionConfig config { get; init; }
+		private MemoryStream pgpKeyStream = null;
+		private bool disposed = false;
 		#endregion
 
 		#region IDisposable default implementation
@@ -22,7 +24,12 @@ namespace fiQ.TaskAdapters.FileMove
 		}
 		protected virtual void Dispose(bool disposing)
 		{
-			// Child classes should override if they contain disposable members
+			if (disposed == false && disposing && pgpKeyStream != null)
+			{
+				pgpKeyStream.Dispose();
+				pgpKeyStream = null;
+			}
+			disposed = true;
 		}
 		#endregion
 
@@ -45,9 +52,43 @@ namespace fiQ.TaskAdapters.FileMove
 		}
 		#endregion
 
-		#region Abstract methods - Connection management
-		public abstract void Connect();
-		public abstract void Disconnect();
+		#region Public properties
+		/// <summary>
+		/// Retrieve stream containing PGP (public or private) key data
+		/// </summary>
+		public Stream PGPKeyStream
+		{
+			get
+			{
+				return pgpKeyStream ?? throw new InvalidOperationException("PGP key stream has not been initialized");
+			}
+		}
+		#endregion
+
+		#region Public methods - Connection management
+		public void Connect()
+		{
+			// If PGP encryption/decryption required, open PGP key file and copy contents into MemoryStream:
+			if (config.PGP)
+			{
+				using (var keyfilestream = new FileStream(config.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read))
+				{
+					if (pgpKeyStream == null)
+					{
+						pgpKeyStream = new MemoryStream();
+					}
+					else
+					{
+						pgpKeyStream.SetLength(0);
+					}
+					keyfilestream.CopyTo(pgpKeyStream);
+				}
+			}
+
+			// Call abstract DoConnect function:
+			DoConnect();
+		}
+		public void Disconnect() => DoDisconnect();
 		#endregion
 
 		#region Abstract methods - File transfer
@@ -57,7 +98,7 @@ namespace fiQ.TaskAdapters.FileMove
 		#endregion
 
 		#region Abstract methods - File management
-		public abstract void RenameFile(string folderPath, string fileName, string newFileName);
+		public abstract void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite);
 		public abstract void DeleteFile(string folderPath, string fileName);
 		#endregion
 
@@ -84,6 +125,11 @@ namespace fiQ.TaskAdapters.FileMove
 		{
 			throw new NotImplementedException("Simple copy not supported");
 		}
+		#endregion
+
+		#region Protected abstract methods - Connection management
+		protected abstract void DoConnect();
+		protected abstract void DoDisconnect();
 		#endregion
 	}
 }

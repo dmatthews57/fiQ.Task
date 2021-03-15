@@ -33,7 +33,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Connection function - create SftpClient and connect to server
 		/// </summary>
-		public override void Connect()
+		protected override void DoConnect()
 		{
 			// SftpClient will throw unfriendly error for this specific case; check first:
 			if (string.IsNullOrEmpty(config.userID))
@@ -91,7 +91,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Disconnection function - gracefully disconnect from server, if connected
 		/// </summary>
-		public override void Disconnect()
+		protected override void DoDisconnect()
 		{
 			if (sftpClient != null)
 			{
@@ -106,6 +106,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// </summary>
 		/// <param name="paths">Collection of SourceFilePaths to search</param>
 		/// <returns>HashSet of downloadable files in source paths, matching source </returns>
+		/// <remarks>Used only when this is "source" connection</remarks>
 		public override HashSet<DownloadFile> GetFileList(List<SourceFilePath> paths)
 		{
 			var fileset = new HashSet<DownloadFile>();
@@ -144,6 +145,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Open writable stream for specified destination file
 		/// </summary>
+		/// <remarks>Used only when this is "destination" connection</remarks>
 		public override StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
 		{
 			// Ensure base folder (if any) exists:
@@ -155,6 +157,7 @@ namespace fiQ.TaskAdapters.FileMove
 				}
 			}
 			// Ensure subfolder (if any) exists:
+			folderPath = GetSubfolderPath(folderPath);
 			if (!string.IsNullOrEmpty(folderPath))
 			{
 				if (!sftpClient.Exists(folderPath))
@@ -181,6 +184,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Perform transfer of data from file at specified path to destination stream
 		/// </summary>
+		/// <remarks>Used only when this is "source" connection</remarks>
 		public override async Task DoTransfer(string folderPath, string fileName, Stream writestream)
 		{
 			// Open read stream to source file (note that folderPath will have been set to a directly-usable
@@ -189,9 +193,8 @@ namespace fiQ.TaskAdapters.FileMove
 
 			if (config.PGP)
 			{
-				// Open private key file and decrypt source stream contents into destination stream:
-				using var privatekeystream = new FileStream(config.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
-				await TaskUtilities.Pgp.Decrypt(privatekeystream, config.pgpPassphrase, readstream, writestream);
+				// Decrypt source stream contents into destination stream (base class must have initialized pgpKeyStream):
+				await TaskUtilities.Pgp.Decrypt(PGPKeyStream, config.pgpPassphrase, readstream, writestream);
 			}
 			else
 			{
@@ -205,17 +208,19 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Rename specified file
 		/// </summary>
-		public override void RenameFile(string folderPath, string fileName, string newFileName)
+		public override void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
 		{
-			// Note that folderPath will have been set to a directly-usable value by GetFileList
-			//sftpClient.RenameFile($"{folderPath}{fileName}", $"{folderPath}{newFileName}");
+			folderPath = GetSubfolderPath(folderPath);
+			sftpClient.RenameFile($"{folderPath}{fileName}", preventOverwrite ? GetNextFilename($"{folderPath}{newFileName}") : $"{folderPath}{newFileName}");
 		}
 		/// <summary>
 		/// Delete specified file
 		/// </summary>
+		/// <remarks>Used only when this is "source" connection</remarks>
 		public override void DeleteFile(string folderPath, string fileName)
 		{
 			//sftpClient.DeleteFile($"{folderPath}{fileName}");
+			Console.WriteLine($"WOULD DELETE {folderPath}{fileName}"); // TODO: UNCOMMENT ACTUAL DELETE
 		}
 		#endregion
 

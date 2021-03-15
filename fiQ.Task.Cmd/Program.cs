@@ -148,7 +148,7 @@ namespace fiQ.TaskCmd
 				.AddLogging(configure => configure.AddSerilog(dispose: true))
 				.AddMemoryCache()
 				.AddSingleton<IConfiguration>(config)
-				.Configure<TaskUtilities.Smtp>(config.GetSection("Smtp"))
+				.Configure<TaskUtilities.SmtpOptions>(config.GetSection("Smtp"))
 				.AddTransient<TaskUtilities.Smtp>()
 				.AddSingleton(x => ActivatorUtilities.CreateInstance<TaskEngine>(x, jobName))
 			;

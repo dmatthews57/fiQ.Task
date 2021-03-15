@@ -13,6 +13,7 @@ namespace fiQ.TaskUtilities
 		public static readonly Regex REGEX_NESTEDPARM_MACRO = new Regex(@"<@(?<name>[^>]+)>");
 		public static readonly Regex REGEX_DIRPATH = new Regex(@"^(?:[a-zA-Z]\:|[\\/]{2}[\w\-.]+[\\/][\w\-. ]+\$?)(?:[\\/][\w\-. <>\[\]]+)*[\\/]?$");
 		public static readonly Regex REGEX_EMAIL = new Regex(@"^([A-Za-z0-9]((\.(?!\.))|[A-Za-z0-9_+-])*)(?<=[A-Za-z0-9_-])@([A-Za-z0-9][A-Za-z0-9-]*(?<=[A-Za-z0-9])\.)+[A-Za-z0-9][A-Za-z0-9-]{0,22}(?<=[A-Za-z0-9])$");
+		public static readonly Regex REGEX_EMAIL_LIST = new Regex($"^{REGEX_EMAIL.ToString()[1..^1]}(\\s*[,;]\\s*{REGEX_EMAIL.ToString()[1..^1]})*$");
 		#endregion
 
 		#region Private fields

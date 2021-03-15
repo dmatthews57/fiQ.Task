@@ -565,8 +565,8 @@ namespace fiQ.TaskAdapters
 							using var filestream = new FileStream(exportFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
 
 							// Create encryption stream around output file, then StreamWriter around top stream in encryption stack:
-							using var encryptionstream = exportPGPRawFormat ? TaskUtilities.Pgp.GetEncryptionStreamRaw(publickeystream, exportPGPUserID, filestream)
-								: TaskUtilities.Pgp.GetEncryptionStream(publickeystream, exportPGPUserID, filestream);
+							using var encryptionstream = exportPGPRawFormat ? await TaskUtilities.Pgp.GetEncryptionStreamRaw(publickeystream, exportPGPUserID, filestream)
+								: await TaskUtilities.Pgp.GetEncryptionStream(publickeystream, exportPGPUserID, filestream);
 							using var streamwriter = new StreamWriter(encryptionstream.GetStream());
 
 							// Write file contents (StreamWriter will write through encryption stream stack to output file stream):

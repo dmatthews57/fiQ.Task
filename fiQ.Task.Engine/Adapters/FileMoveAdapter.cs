@@ -16,40 +16,31 @@ namespace fiQ.TaskAdapters
 	{
 		#region Fields and constructors
 		private static readonly JsonSerializerOptions downloadListFileFormat = new JsonSerializerOptions { WriteIndented = true };
-		private ConnectionConfig sourceConnectionConfig = null;
-		private ConnectionConfig destConnectionConfig = null;
-		private bool preventOverwrite = false;			// By default, existing files will be overwritten
-		private bool copyFileOnly = false;				// If true, file will be copied instead of moved
-		private Regex fileRenameRegex = null;			// Regex for renaming file during transfer
-		private string fileRenameReplacement = null;	// Replacement value for renaming file during transfer
-		private bool fileRenameDefer = false;			// If true, file will be renamed after transfer complete
-		private Regex sourceFileRenameRegex = null;		// Regex for renaming source file after transfer (if copyFileOnly)
-		private string sourceFileRenameReplacement = null;  // Replacement value for renaming source file after transfer complete (if copyFileOnly)
-		private bool suppressErrors = false;			// If true, errors will not be factored into success/failure of this task
-
 		public FileMoveAdapter(IConfiguration _config, ILogger<FileMoveAdapter> _logger, string taskName = null)
 			: base(_config, _logger, taskName) {}
 		#endregion
 
 		/// <summary>
-		/// TODO: SUMMARY
+		/// Move or copy all files matching a pattern from a source location to a destination location, optionally
+		/// encrypting/decrypting/renaming in the process
 		/// </summary>
 		public override async Task<TaskResult> ExecuteTask(TaskParameters parameters)
 		{
 			var result = new TaskResult();
 			var dateTimeNow = DateTime.Now; // Use single value throughout for consistency in macro replacements
-			Stream downloadListFile = null;
+			bool suppressErrors = false; // If true, errors will not be factored into success/failure of this task
+			Stream downloadListFile = null; // If used, download listing file will be held open until finally block
 			try
 			{
 				#region Retrieve task parameters
 				// Load source connection configuration and validate:
-				sourceConnectionConfig = new ConnectionConfig(parameters, true);
+				var sourceConnectionConfig = new ConnectionConfig(parameters, true);
 				if (sourceConnectionConfig.Invalid)
 				{
 					throw new ArgumentException("Source configuration invalid");
 				}
 				// Load destination connection configuration and validate:
-				destConnectionConfig = new ConnectionConfig(parameters, false);
+				var destConnectionConfig = new ConnectionConfig(parameters, false);
 				if (destConnectionConfig.Invalid)
 				{
 					throw new ArgumentException("Destination configuration invalid");
@@ -78,37 +69,44 @@ namespace fiQ.TaskAdapters
 					throw new ArgumentException("No valid source file paths found");
 				}
 
-				// Read optional parameters:
-				preventOverwrite = parameters.GetBool("PreventOverwrite");
-				copyFileOnly = parameters.GetBool("CopyFileOnly");
-				fileRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FileRenameRegex"), RegexOptions.IgnoreCase);
+				// Read optional parameters - behavior:
+				suppressErrors = parameters.GetBool("SuppressErrors");
+				var maxAge = parameters.Get<TimeSpan>("MaxAge", TimeSpan.TryParse);
+				var preventOverwrite = parameters.GetBool("PreventOverwrite");
+				var copyFileOnly = parameters.GetBool("CopyFileOnly");
+
+				// Read optional parameters - rename file at destination:
+				var fileRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("FileRenameRegex"), RegexOptions.IgnoreCase);
+				string fileRenameReplacement = null;
+				bool fileRenameDefer = false; // If true, file will be renamed after transfer complete
 				if (fileRenameRegex != null)
 				{
-					fileRenameReplacement = parameters.GetString("FileRenameReplacement", null, dateTimeNow) ?? string.Empty;
 					fileRenameDefer = parameters.GetBool("FileRenameDefer");
-				}
-				sourceFileRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("SourceFileRenameRegex"), RegexOptions.IgnoreCase);
-				if (sourceFileRenameRegex != null)
-				{
-					sourceFileRenameReplacement = parameters.GetString("SourceFileRenameReplacement", null, dateTimeNow) ?? string.Empty;
+					if (fileRenameDefer && preventOverwrite)
+					{
+						// Deferred rename occurs at remote site; with preventOverwrite on, original file may be uploaded under another name
+						// by destination object (meaning rename step would fail), and final filename will not be checked in advance:
+						throw new ArgumentException("PreventOverwrite and FileRenameDefer options cannot be used together");
+					}
+					fileRenameReplacement = parameters.GetString("FileRenameReplacement", null, dateTimeNow) ?? string.Empty;
 				}
 
-				// Check for illogical configurations:
-				if (preventOverwrite && fileRenameDefer)
+				// Read optional parameters - rename source file after copy:
+				var sourceFileRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("SourceFileRenameRegex"), RegexOptions.IgnoreCase);
+				string sourceFileRenameReplacement = null;
+				if (sourceFileRenameRegex != null)
 				{
-					// Deferred rename occurs at remote site; with preventOverwrite on, original file may be uploaded under another name
-					// (meaning rename will fail), and final filename will not be checked in advance:
-					throw new ArgumentException("PreventOverwrite and FileRenameDefer options cannot be used together");
-				}
-				else if (!copyFileOnly && sourceFileRenameRegex != null)
-				{
-					// If CopyFileOnly is not set, source file will be deleted (and thus cannot be renamed); raise error to ensure that
-					// unintended behavior does not occur (allow opportunity to correct configuration)
-					throw new ArgumentException("SourceFileRenameRegex cannot be used unless CopyFileOnly is set");
+					if (!copyFileOnly)
+					{
+						// If CopyFileOnly is not set, source file will be deleted (and thus cannot be renamed); raise error to ensure that
+						// unintended behavior does not occur (allow opportunity to correct configuration):
+						throw new ArgumentException("SourceFileRenameRegex cannot be used unless CopyFileOnly is set");
+					}
+					sourceFileRenameReplacement = parameters.GetString("SourceFileRenameReplacement", null, dateTimeNow) ?? string.Empty;
 				}
 				#endregion
 
-				#region If download listing is configured, open and read
+				#region If file download history listing is configured, open file and read
 				DownloadFileList downloadFileList = null;
 				string downloadListFilename = parameters.GetString("DownloadListFilename");
 				if (!string.IsNullOrEmpty(downloadListFilename))
@@ -116,11 +114,11 @@ namespace fiQ.TaskAdapters
 					if (File.Exists(downloadListFilename))
 					{
 						// Open file (note this FileStream will be kept open until finally block below) and attempt to
-						// deserialize file listing from its contents:
+						// deserialize file listing from its contents (if any):
 						downloadListFile = new FileStream(downloadListFilename, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 						downloadFileList = downloadListFile.Length > 0 ? await JsonSerializer.DeserializeAsync<DownloadFileList>(downloadListFile) : new DownloadFileList();
 
-						// If there are any files in listing, check whether we need to prune the list by download age:
+						// If there are any files in listing, prune list by download age:
 						if (downloadFileList?.downloadFiles?.Count > 0)
 						{
 							if (downloadFileList.PruneList(parameters.Get<TimeSpan>("DownloadListMaxAge", TimeSpan.TryParse)))
@@ -133,7 +131,7 @@ namespace fiQ.TaskAdapters
 					}
 					else
 					{
-						// Create file, leave stream open for use below:
+						// Create new empty file (leave stream open for use below) and new empty listing:
 						downloadListFile = new FileStream(downloadListFilename, FileMode.Create, FileAccess.Write, FileShare.None);
 						downloadFileList = new DownloadFileList();
 					}
@@ -150,6 +148,12 @@ namespace fiQ.TaskAdapters
 						// Remove any files already present in downloaded list from current set:
 						fileList.ExceptWith(downloadFileList.downloadFiles);
 					}
+					if (fileList.Any() && maxAge != null)
+					{
+						// Remove any files older than maxAge (ignoring sign - allow age to be specified either way):
+						var minLastWriteTime = dateTimeNow.Add((TimeSpan)(maxAge?.TotalMilliseconds > 0 ? maxAge?.Negate() : maxAge));
+						fileList.RemoveWhere(file => file.lastWriteTime < minLastWriteTime);
+					}
 
 					if (fileList.Any())
 					{
@@ -158,7 +162,13 @@ namespace fiQ.TaskAdapters
 						destConnection.Connect();
 						foreach (var file in fileList)
 						{
-							using var logscope = logger.BeginScope(new Dictionary<string, object>() { ["FileFolder"] = file.fileFolder, ["FileName"] = file.fileName });
+							using var logscope = new TaskUtilities.LogScopeHelper(logger, new Dictionary<string, object>()
+							{
+								["FileFolder"] = file.fileFolder,
+								["FileName"] = file.fileName,
+								["SourcePGP"] = sourceConnectionConfig.PGP,
+								["DestPGP"] = destConnectionConfig.PGP
+							});
 							try
 							{
 								#region Perform file transfer
@@ -170,19 +180,20 @@ namespace fiQ.TaskAdapters
 								if (destConnection.SupportsSimpleCopy(sourceConnection))
 								{
 									string destPath = destConnection.DoSimpleCopy(sourceConnection, file.fileFolder, file.fileName, file.DestinationSubfolder, destFileName, preventOverwrite);
-									logger.LogInformation("File transferred (using simple copy) to {DestFilePath}", destPath);
+									logscope.AddToState("DestFilePath", destPath);
+									logger.LogInformation("File transferred (using simple copy)");
 								}
 								else // Non-folder source/destination or PGP encryption/decryption required
 								{
 									// Request write stream from destination object:
 									using var deststream = destConnection.GetWriteStream(file.DestinationSubfolder, destFileName, preventOverwrite);
+									logscope.AddToState("DestFilePath", deststream.path);
 									if (destConnectionConfig.PGP)
 									{
-										// Destination requires PGP encryption - open public key file, create encrypting stream around destination stream:
-										using var publickeystream = new FileStream(destConnectionConfig.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
+										// Destination requires PGP encryption - create encrypting stream around destination stream:
 										using var encstream = destConnectionConfig.pgpRawFormat ?
-											TaskUtilities.Pgp.GetEncryptionStreamRaw(publickeystream, destConnectionConfig.pgpUserID, deststream.stream)
-											: TaskUtilities.Pgp.GetEncryptionStream(publickeystream, destConnectionConfig.pgpUserID, deststream.stream);
+											await TaskUtilities.Pgp.GetEncryptionStreamRaw(destConnection.PGPKeyStream, destConnectionConfig.pgpUserID, deststream.stream)
+											: await TaskUtilities.Pgp.GetEncryptionStream(destConnection.PGPKeyStream, destConnectionConfig.pgpUserID, deststream.stream);
 
 										// Order source connection to write data from specified file into encrypting stream:
 										await sourceConnection.DoTransfer(file.fileFolder, file.fileName, encstream.GetStream());
@@ -192,15 +203,16 @@ namespace fiQ.TaskAdapters
 										// No encryption required - order source connection to write data from specified file into destination stream:
 										await sourceConnection.DoTransfer(file.fileFolder, file.fileName, deststream.stream);
 									}
-									logger.LogInformation("File transferred to {DestFilePath}", deststream.path);
+									logger.LogInformation("File transferred");
 								}
 
 								// If file rename deferred, perform now:
 								if (fileRenameDefer)
 								{
 									var renameFile = fileRenameRegex.Replace(destFileName, fileRenameReplacement);
-									destConnection.RenameFile(file.DestinationSubfolder, destFileName, renameFile);
-									logger.LogInformation("File renamed at destination to {DestFilePath}", renameFile);
+									logscope.AddToState("DestFileRenamePath", renameFile);
+									destConnection.RenameFile(file.DestinationSubfolder, destFileName, renameFile, preventOverwrite);
+									logger.LogInformation("File renamed at destination", renameFile);
 								}
 								#endregion
 
@@ -210,7 +222,7 @@ namespace fiQ.TaskAdapters
 									if (sourceFileRenameRegex != null)
 									{
 										var renameFile = sourceFileRenameRegex.Replace(file.fileName, sourceFileRenameReplacement);
-										sourceConnection.RenameFile(file.fileFolder, file.fileName, renameFile);
+										sourceConnection.RenameFile(file.fileFolder, file.fileName, renameFile, preventOverwrite);
 										logger.LogDebug($"Source file renamed to {renameFile}");
 									}
 								}

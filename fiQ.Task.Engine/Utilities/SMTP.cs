@@ -15,6 +15,7 @@ namespace fiQ.TaskUtilities
 	public class Smtp : IDisposable
 	{
 		#region Fields and constructors
+		private static readonly char[] separators = new char[] { ',', ';' };
 		private readonly SmtpOptions options;
 		private readonly ILogger logger;
 		private bool disposed = false;
@@ -75,7 +76,7 @@ namespace fiQ.TaskUtilities
 					IsBodyHtml = true
 				})
 				{
-					mailMessage.To.Add((string.IsNullOrEmpty(messageTo) ? options.DefaultTo : messageTo).Replace(";", ","));
+					mailMessage.To.Add(FormatToList(string.IsNullOrEmpty(messageTo) ? options.DefaultTo : messageTo));
 					if (attachment != null)
 					{
 						mailMessage.Attachments.Add(new Attachment(attachment, attachmentName));
@@ -90,6 +91,16 @@ namespace fiQ.TaskUtilities
 			}
 			*/
 			return false;
+		}
+		#endregion
+
+		#region Private methods
+		/// <summary>
+		/// Properly format "to" email listing (comma-separated, trimmed with empty entries removed)
+		/// </summary>
+		private string FormatToList(string to)
+		{
+			return string.Join(',', to.Split(separators, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
 		}
 		#endregion
 	}

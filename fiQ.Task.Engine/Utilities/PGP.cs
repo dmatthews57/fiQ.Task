@@ -21,14 +21,12 @@ namespace fiQ.TaskUtilities
 		/// <remarks>
 		/// - Source data will be read asynchronously
 		/// - Destination data will be written asynchronously
-		/// - Public key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
-		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
 		/// </remarks>
 		public static async Task EncryptRaw(Stream publickeysource, string publickeyuserid, Stream clearinput, Stream encryptedoutput)
 		{
 			// Create encrypted data generator, using public key extracted from provided source:
 			var pgpEncDataGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
-			pgpEncDataGen.AddMethod(ExtractPublicKey(publickeysource, publickeyuserid));
+			pgpEncDataGen.AddMethod(await ExtractPublicKey(publickeysource, publickeyuserid));
 
 			// Wrap destination stream in encrypted data generator stream:
 			using (var encrypt = pgpEncDataGen.Open(encryptedoutput, new byte[1024]))
@@ -59,8 +57,6 @@ namespace fiQ.TaskUtilities
 		/// <remarks>
 		/// - Source data will be read asynchronously
 		/// - Destination data will be written asynchronously
-		/// - Public key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
-		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
 		/// </remarks>
 		public static async Task Encrypt(Stream publickeysource, string publickeyuserid, Stream clearinput, Stream encryptedoutput)
 		{
@@ -83,16 +79,15 @@ namespace fiQ.TaskUtilities
 		/// <remarks>
 		/// - Caller is responsible for disposing of returned StreamStack (BEFORE disposing of original encryptedoutput Stream)
 		/// - Caller is also still responsible for disposing of encryptedinput stream (AFTER disposing of returned StreamStack)
-		/// - Public key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
 		/// </remarks>
-		public static StreamStack GetEncryptionStreamRaw(Stream publickeysource, string publickeyuserid, Stream encryptedoutput)
+		public static async Task<StreamStack> GetEncryptionStreamRaw(Stream publickeysource, string publickeyuserid, Stream encryptedoutput)
 		{
 			var encryptionstream = new StreamStack();
 			try
 			{
 				// Create encrypted data generator using public key extracted from provided source:
 				var pgpEncDataGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
-				pgpEncDataGen.AddMethod(ExtractPublicKey(publickeysource, publickeyuserid));
+				pgpEncDataGen.AddMethod(await ExtractPublicKey(publickeysource, publickeyuserid));
 
 				// Create encrypted data generator stream around destination stream and push on to return value stack:
 				encryptionstream.PushStream(pgpEncDataGen.Open(encryptedoutput, new byte[1024]));
@@ -127,9 +122,8 @@ namespace fiQ.TaskUtilities
 		/// <remarks>
 		/// - Caller is responsible for disposing of returned StreamStack (BEFORE disposing of original encryptedoutput Stream)
 		/// - Caller is also still responsible for disposing of encryptedinput stream (AFTER disposing of returned StreamStack)
-		/// - Public key will be read synchronously from source (if this is a concern, caller should pull into local stream asynchronously first)
 		/// </remarks>
-		public static StreamStack GetEncryptionStream(Stream publickeysource, string publickeyuserid, Stream encryptedoutput)
+		public static async Task<StreamStack> GetEncryptionStream(Stream publickeysource, string publickeyuserid, Stream encryptedoutput)
 		{
 			var encryptionstream = new StreamStack();
 			try
@@ -139,7 +133,7 @@ namespace fiQ.TaskUtilities
 
 				// Create encrypted data generator using public key extracted from provided source:
 				var pgpEncDataGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
-				pgpEncDataGen.AddMethod(ExtractPublicKey(publickeysource, publickeyuserid));
+				pgpEncDataGen.AddMethod(await ExtractPublicKey(publickeysource, publickeyuserid));
 
 				// Create encrypted data generator stream around armored output stream and push on to return value stack:
 				encryptionstream.PushStream(pgpEncDataGen.Open(encryptionstream.GetStream(), new byte[1024]));
@@ -172,9 +166,7 @@ namespace fiQ.TaskUtilities
 		/// <param name="encryptedinput">Input stream containing source data to be decrypted</param>
 		/// <param name="clearoutput">Output stream to receive decrypted data</param>
 		/// <remarks>
-		/// - Private key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
-		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
-		/// - Destination data stream will be written asynchronously, but source data stream will be read synchronously (due to limitation in PGP
+		/// Destination data stream will be written asynchronously, but source data stream will be read synchronously (due to limitation in PGP
 		/// library; all source data must be available to perform decryption, but source library does not provide async option). If this is a concern,
 		/// caller should consider asynchronously pulling source data into local stream first and passing local stream to this function (if increased
 		/// use of memory outweighs waiting for blocked thread to perform I/O)
@@ -187,7 +179,7 @@ namespace fiQ.TaskUtilities
 				var encrypteddata = new PgpObjectFactory(decoder).GetEncryptedData() ?? throw new ArgumentException("No PGP-encrypted data found");
 
 				// Extract private key from key source (using key ID required by encrypted data object), use to open clear stream:
-				using (var clearsource = encrypteddata.GetDataStream(ExtractPrivateKey(privatekeysource, privatekeypassphrase, encrypteddata.KeyId)))
+				using (var clearsource = encrypteddata.GetDataStream(await ExtractPrivateKey(privatekeysource, privatekeypassphrase, encrypteddata.KeyId)))
 				{
 					// Create new object factory from clear stream and use to write cleartext data to destination:
 					await new PgpObjectFactory(clearsource).WriteClearData(clearoutput);
@@ -207,13 +199,11 @@ namespace fiQ.TaskUtilities
 		/// <remarks>
 		/// - Caller is responsible for disposing of returned StreamStack (BEFORE disposing of original encryptedinput Stream)
 		/// - Caller is also still responsible for disposing of encryptedinput stream (AFTER disposing of returned StreamStack)
-		/// - Private key will be read synchronously from source; if this is a concern, caller should asynchronously pull public key data into local
-		/// stream (e.g. a MemoryStream) first, and then pass local stream into this function
 		/// - Source data stream will be read synchronously (due to limitation in PGP library; all source data must be available to perform decryption,
 		/// but source library does not provide async option). If this is a concern, caller should consider asynchronously pulling source data into local
 		/// stream first and passing local stream to this function (if increased use of memory outweighs waiting for blocked thread to perform I/O)
 		/// </remarks>
-		public static StreamStack GetDecryptionStream(Stream privatekeysource, string privatekeypassphrase, Stream encryptedinput)
+		public static async Task<StreamStack> GetDecryptionStream(Stream privatekeysource, string privatekeypassphrase, Stream encryptedinput)
 		{
 			var decryptionstream = new StreamStack();
 			try
@@ -227,7 +217,7 @@ namespace fiQ.TaskUtilities
 
 				// Extract private key from key source (using key ID required by encrypted data object), use to open
 				// clear stream and push on to return value stack:
-				decryptionstream.PushStream(encrypteddata.GetDataStream(ExtractPrivateKey(privatekeysource, privatekeypassphrase, encrypteddata.KeyId)));
+				decryptionstream.PushStream(encrypteddata.GetDataStream(await ExtractPrivateKey(privatekeysource, privatekeypassphrase, encrypteddata.KeyId)));
 
 				// Create new factory from clear stream and extract first PGP object:
 				factory = new PgpObjectFactory(decryptionstream.GetStream());
@@ -264,13 +254,24 @@ namespace fiQ.TaskUtilities
 		#endregion
 
 		#region Private methods
-		private static PgpPrivateKey ExtractPrivateKey(Stream keysource, string passphrase, long keyID)
+		private static async Task<PgpPrivateKey> ExtractPrivateKey(Stream keysource, string passphrase, long keyID)
 		{
 			try
 			{
-				// Use DecoderStream to read secret keyring bundle from stream, retrieve the secret
+				// Create MemoryStream and copy in contents of keysource (first resetting position of keysource stream, if possible);
+				// this is required to support caller reusing private key source stream, if desired (because DecoderStream, when
+				// itself disposed, will dispose of its underlying stream and destroy original key data):
+				using var memkeysource = new MemoryStream();
+				if (keysource.CanSeek)
+				{
+					keysource.Position = 0;
+				}
+				await keysource.CopyToAsync(memkeysource);
+				memkeysource.Position = 0;
+
+				// Use DecoderStream to read secret keyring bundle from memory stream, retrieve the secret
 				// key based on requested keyID, and extract using provided passphrase (if any):
-				using var decoderstream = PgpUtilities.GetDecoderStream(keysource);
+				using var decoderstream = PgpUtilities.GetDecoderStream(memkeysource);
 				return new PgpSecretKeyRingBundle(decoderstream)
 					.GetSecretKey(keyID)
 					?.ExtractPrivateKey((passphrase ?? string.Empty).ToCharArray()) ?? throw new ArgumentException("Invalid key ring or private key not found");
@@ -287,10 +288,21 @@ namespace fiQ.TaskUtilities
 				}
 			}
 		}
-		private static PgpPublicKey ExtractPublicKey(Stream keysource, string userid)
+		private static async Task<PgpPublicKey> ExtractPublicKey(Stream keysource, string userid)
 		{
-			// Use DecoderStream to read public keyring bundle from stream:
-			using var decoderstream = PgpUtilities.GetDecoderStream(keysource);
+			// Create MemoryStream and copy in contents of keysource (first resetting position of keysource stream, if possible);
+			// this is required to support caller reusing public key source stream, if desired (because DecoderStream, when
+			// itself disposed, will dispose of its underlying stream and destroy original key data):
+			using var memkeysource = new MemoryStream();
+			if (keysource.CanSeek)
+			{
+				keysource.Position = 0;
+			}
+			await keysource.CopyToAsync(memkeysource);
+			memkeysource.Position = 0;
+
+			// Use DecoderStream to read public keyring bundle from memory stream:
+			using var decoderstream = PgpUtilities.GetDecoderStream(memkeysource);
 			return new PgpPublicKeyRingBundle(decoderstream)
 				// Extract public keyrings:
 				.GetKeyRings()

@@ -4,14 +4,15 @@ using System.IO;
 namespace fiQ.TaskAdapters.FileMove
 {
 	/// <summary>
-	/// Wrapper class to hold (and handle disposal of) a Stream handle alongside a string indicating path of stream
+	/// Wrapper class to hold (and handle disposal of) a Stream handle alongside a string providing full
+	/// remote path of the file to which Stream points
 	/// </summary>
 	class StreamPath : IDisposable
 	{
 		#region Fields and properties
 		private bool disposed = false;
-		public Stream stream { get; set; }
-		public string path { get; set; }
+		public Stream stream { get; init; }
+		public string path { get; init; }
 		#endregion
 
 		#region IDisposable implementation
@@ -25,7 +26,6 @@ namespace fiQ.TaskAdapters.FileMove
 			if (disposed == false && disposing && stream != null)
 			{
 				stream.Dispose();
-				stream = null;
 			}
 			disposed = true;
 		}

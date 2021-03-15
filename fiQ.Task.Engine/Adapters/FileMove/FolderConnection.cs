@@ -13,13 +13,13 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Connection function - currently unused (may perform impersonation in future, if required)
 		/// </summary>
-		public override void Connect()
+		protected override void DoConnect()
 		{
 		}
 		/// <summary>
 		/// Disconnection function - currently unused (may clean up impersonation resources in future, if required)
 		/// </summary>
-		public override void Disconnect()
+		protected override void DoDisconnect()
 		{
 		}
 		#endregion
@@ -30,6 +30,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// </summary>
 		/// <param name="paths">Collection of SourceFilePaths to search</param>
 		/// <returns>HashSet of downloadable files in source paths, matching source </returns>
+		/// <remarks>Used only when this is "source" connection</remarks>
 		public override HashSet<DownloadFile> GetFileList(List<SourceFilePath> paths)
 		{
 			var fileset = new HashSet<DownloadFile>();
@@ -41,17 +42,20 @@ namespace fiQ.TaskAdapters.FileMove
 					?? TaskUtilities.General.RegexFromFileFilter(path.FilenameFilter);
 
 				// Enumerate files in specified folder matching filter, apply regex and construct DownloadFiles:
+				string subfolderPath = string.IsNullOrEmpty(path.FolderPath) ? config.location : Path.Combine(config.location, path.FolderPath);
 				fileset.UnionWith(
-					Directory.EnumerateFiles(string.IsNullOrEmpty(path.FolderPath) ? config.location : Path.Combine(config.location, path.FolderPath), path.FilenameFilter)
+					Directory.EnumerateFiles(subfolderPath, path.FilenameFilter)
 						.Where(fileName => filenameRegex.IsMatch(Path.GetFileName(fileName)))
 						.Select(fileName => new FileInfo(fileName))
 						.Select(fileInfo => new DownloadFile
 						{
-							DestinationSubfolder = path.DestinationSubfolder,
-							fileFolder = path.FolderPath,
+							// Note that full source path is replacing configured FolderPath value here, so later
+							// operations can just use it directly without re-evaluating:
+							fileFolder = subfolderPath,
 							fileName = fileInfo.Name,
 							lastWriteTime = fileInfo.LastWriteTime,
-							size = fileInfo.Length
+							size = fileInfo.Length,
+							DestinationSubfolder = path.DestinationSubfolder
 						})
 				);
 			}
@@ -60,6 +64,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Open writable stream for specified destination file
 		/// </summary>
+		/// <remarks>Used only when this is "destination" connection</remarks>
 		public override StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite)
 		{
 			// Ensure destination base folder exists:
@@ -95,17 +100,17 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Perform transfer of data from file at specified path to destination stream
 		/// </summary>
+		/// <remarks>Used only when this is "source" connection</remarks>
 		public override async Task DoTransfer(string folderPath, string fileName, Stream writestream)
 		{
-			// Open read stream on source file:
-			using var readstream = new FileStream(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName),
-				FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+			// Open read stream on source file (note that folderPath will have been set to a directly-usable
+			// value by GetFileList, when it originally evaluated path):
+			using var readstream = new FileStream(Path.Combine(folderPath, fileName), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
 			if (config.PGP)
 			{
-				// Open private key file and decrypt source stream contents into destination stream:
-				using var privatekeystream = new FileStream(config.pgpKeyRing, FileMode.Open, FileAccess.Read, FileShare.Read);
-				await TaskUtilities.Pgp.Decrypt(privatekeystream, config.pgpPassphrase, readstream, writestream);
+				// Decrypt source stream contents into destination stream (base class must have initialized pgpKeyStream):
+				await TaskUtilities.Pgp.Decrypt(PGPKeyStream, config.pgpPassphrase, readstream, writestream);
 			}
 			else
 			{
@@ -119,18 +124,20 @@ namespace fiQ.TaskAdapters.FileMove
 		/// <summary>
 		/// Rename specified file
 		/// </summary>
-		public override void RenameFile(string folderPath, string fileName, string newFileName)
+		public override void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
 		{
-			// Combine base location and subfolder path, handle duplicate filenames, then rename:
+			// Combine base location and subfolder path, handle duplicate filenames if needed, then rename:
 			folderPath = string.IsNullOrEmpty(folderPath) ? config.location : Path.Combine(config.location, folderPath);
-			string destFilePath = GetNextFilename(Path.Combine(folderPath, newFileName));
-			//File.Move(Path.Combine(folderPath, fileName), destFilePath);
+			string destFilePath = Path.Combine(folderPath, newFileName);
+			File.Move(Path.Combine(folderPath, fileName), preventOverwrite ? GetNextFilename(destFilePath) : destFilePath);
 		}
 		/// <summary>
 		/// Delete specified file
 		/// </summary>
+		/// <remarks>Used only when this is "source" connection</remarks>
 		public override void DeleteFile(string folderPath, string fileName)
 		{
+			Console.WriteLine($"WOULD DELETE {(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName))}"); // TODO: UNCOMMENT ACTUAL DELETE
 			//File.Delete(string.IsNullOrEmpty(folderPath) ? Path.Combine(config.location, fileName) : Path.Combine(config.location, folderPath, fileName));
 		}
 		#endregion
@@ -142,7 +149,7 @@ namespace fiQ.TaskAdapters.FileMove
 		/// </summary>
 		public override bool SupportsSimpleCopy(Connection sourceConnection)
 		{
-			return string.IsNullOrEmpty(config.pgpKeyRing) && sourceConnection is FolderConnection fc && string.IsNullOrEmpty(fc.config.pgpKeyRing);
+			return !config.PGP && sourceConnection is FolderConnection fc && !fc.config.PGP;
 		}
 		/// <summary>
 		/// Perform simple file copy (no encryption) from a FolderConnection source
@@ -178,11 +185,9 @@ namespace fiQ.TaskAdapters.FileMove
 				destPath = GetNextFilename(destPath);
 			}
 
-			// Perform simple file copy operation, constructing source path and handling existing file, if not overwriting:
-			File.Copy(
-				string.IsNullOrEmpty(sourceFolderPath) ? Path.Combine(sourcefc.config.location, sourceFileName)
-					: Path.Combine(sourcefc.config.location, sourceFolderPath, sourceFileName),
-				 destPath, !preventOverwrite);
+			// Perform simple file copy operation (note source path will have been set to directly-usable value
+			// by source connection's GetFileList, when it originally evaluated path):
+			File.Copy(Path.Combine(sourceFolderPath, sourceFileName), destPath, !preventOverwrite);
 
 			// Return final destination path:
 			return destPath;
