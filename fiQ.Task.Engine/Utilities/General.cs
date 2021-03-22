@@ -1,5 +1,4 @@
 ﻿using System;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -11,8 +10,17 @@ namespace fiQ.TaskUtilities
 		public static readonly Regex REGEX_GUID = new Regex(@"^(\{)?[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}(\})?$");
 		public static readonly Regex REGEX_DATE_MACRO = new Regex(@"<U?(yy|MM|dd|HH|hh|H|h|mm|ss)+([[][+-]\d*[yMdHhms][]])*>");
 		public static readonly Regex REGEX_NESTEDPARM_MACRO = new Regex(@"<@(?<name>[^>]+)>");
-		public static readonly Regex REGEX_DIRPATH = new Regex(@"^(?:[a-zA-Z]\:|[\\/]{2}[\w\-.]+[\\/][\w\-. ]+\$?)(?:[\\/][\w\-. <>\[\]]+)*[\\/]?$");
+		/// <summary>
+		/// Validate directory/folder path: optional drive [i.e. "C:"] or server share [i.e. "\\server\public" or "\\server\private$"] (if present,
+		/// drive or server share must be followed by slash or end of string) followed by any number of subfolders (each must end with slash or end
+		/// of string); note that a blank string WILL match this regex, caller must decide whether to reject or treat as "current" folder
+		/// </summary>
+		public static readonly Regex REGEX_FOLDERPATH = new Regex(@"^(?:(?:[a-zA-Z]\:|[\\/][\\/]+[\w\-.]+[\\/]+[\w\-. ]+\$?)?(?:[\\/]+|$))?(?:[\w\-. <>\[\]]+(?:[\\/]+|$))*$");
+		public static readonly Regex REGEX_PATH_SLASHES = new Regex(@"(?<!^)/+"); // All forward slashes except at start of string
 		public static readonly Regex REGEX_EMAIL = new Regex(@"^([A-Za-z0-9]((\.(?!\.))|[A-Za-z0-9_+-])*)(?<=[A-Za-z0-9_-])@([A-Za-z0-9][A-Za-z0-9-]*(?<=[A-Za-z0-9])\.)+[A-Za-z0-9][A-Za-z0-9-]{0,22}(?<=[A-Za-z0-9])$");
+		/// <summary>
+		/// One or more email addresses linked by comma or semicolon; for simplicity re-uses REGEX_EMAIL (stripping start/end anchors)
+		/// </summary>
 		public static readonly Regex REGEX_EMAIL_LIST = new Regex($"^{REGEX_EMAIL.ToString()[1..^1]}(\\s*[,;]\\s*{REGEX_EMAIL.ToString()[1..^1]})*$");
 		#endregion
 
@@ -21,7 +29,7 @@ namespace fiQ.TaskUtilities
 		private static readonly Regex REGEX_DATE_MACRO_ADJUST = new Regex(@"[[](?<sign>[+-])(?<digits>\d*)(?<unit>[yMdHhms])[]]");
 		#endregion
 
-		#region Regex utility methods
+		#region Regex and file path utility methods
 		/// <summary>
 		/// Create a Regex object from the specified string and options
 		/// </summary>
@@ -40,6 +48,18 @@ namespace fiQ.TaskUtilities
 			// Escape regex-reserved characters, then convert escaped wildcards (* and ?) to their regex equivalents:
 			return string.IsNullOrEmpty(fileFilter) ? null
 				: new Regex($"^{Regex.Escape(fileFilter).Replace(@"\*", ".*").Replace(@"\?", ".")}$", RegexOptions.IgnoreCase);
+		}
+
+		/// <summary>
+		/// Combine portions of path together (ignoring empty entries) and standardize with forward slashes
+		/// </summary>
+		/// <remarks>
+		/// Unlike Path.Combine, will not allow leading slash in entries after the first to override entire path. Will replace
+		/// any consecutive slashes (after the first character, to allow network share path) with single slash
+		/// </remarks>
+		public static string PathCombine(params string[] values)
+		{
+			return REGEX_PATH_SLASHES.Replace(string.Join('/', values.Where(s => !string.IsNullOrEmpty(s))).Replace('\\', '/'), "/");
 		}
 		#endregion
 

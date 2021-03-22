@@ -169,8 +169,16 @@ namespace fiQ.TaskAdapters.FileMove
 		/// </summary>
 		public override void DeleteFile(string folderPath, string fileName)
 		{
-			//sftpClient.DeleteFile($"{folderPath}{fileName}");
-			Console.WriteLine($"WOULD DELETE {folderPath}{fileName}"); // TODO: UNCOMMENT ACTUAL DELETE
+			// Note that folderPath will have been set to a directly-usable value by GetFileList:
+			sftpClient.DeleteFile($"{folderPath}{fileName}");
+		}
+		/// <summary>
+		/// Rename specified file at source
+		/// </summary>
+		public override void SourceRenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
+		{
+			// Note that folderPath will have been set to a directly-usable value by GetFileList:
+			sftpClient.RenameFile($"{folderPath}{fileName}", preventOverwrite ? GetNextFilename($"{folderPath}{newFileName}") : $"{folderPath}{newFileName}");
 		}
 		#endregion
 
@@ -219,13 +227,10 @@ namespace fiQ.TaskAdapters.FileMove
 		public override async Task FinalizeWrite(StreamPath streampath)
 		{
 		}
-		#endregion
-
-		#region Connection implementation - File management
 		/// <summary>
-		/// Rename specified file
+		/// Perform deferred rename of file at destination
 		/// </summary>
-		public override void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
+		public override void DestRenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
 		{
 			folderPath = GetSubfolderPath(folderPath);
 			sftpClient.RenameFile($"{folderPath}{fileName}", preventOverwrite ? GetNextFilename($"{folderPath}{newFileName}") : $"{folderPath}{newFileName}");

@@ -57,9 +57,10 @@ namespace fiQ.TaskAdapters.FileMove
 				{
 					locationType = LocationType.Email;
 				}
-				else if (TaskUtilities.General.REGEX_DIRPATH.IsMatch(location))
+				else if (TaskUtilities.General.REGEX_FOLDERPATH.IsMatch(location))
 				{
 					locationType = LocationType.Folder;
+					location = location.Replace('\\', '/');
 				}
 			}
 			#endregion

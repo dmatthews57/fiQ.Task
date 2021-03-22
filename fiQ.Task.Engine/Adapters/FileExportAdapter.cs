@@ -62,7 +62,7 @@ namespace fiQ.TaskAdapters
 				#region Retrieve task parameters
 				string connectionString = config.GetConnectionString(parameters.GetString("ConnectionString"));
 				exportProcedureName = parameters.GetString("ExportProcedureName");
-				string exportFolder = parameters.GetString("ExportFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string exportFolder = parameters.GetFolder("ExportFolder", dateTimeNow);
 				if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(exportProcedureName) || string.IsNullOrEmpty(exportFolder))
 				{
 					throw new ArgumentException("Missing or invalid ConnectionString, ExportProcedureName and/or ExportFolder");
@@ -214,7 +214,7 @@ namespace fiQ.TaskAdapters
 						{
 							// Pass processing off to utility function, receiving any output parameters from
 							// export procedure and merging into overall task return value set:
-							result.MergeReturnValues(await ExportFile(cnn, string.IsNullOrEmpty(queuedFile.Subfolder) ? exportFolder : Path.Combine(exportFolder, queuedFile.Subfolder), exportFilename));
+							result.MergeReturnValues(await ExportFile(cnn, string.IsNullOrEmpty(queuedFile.Subfolder) ? exportFolder : TaskUtilities.General.PathCombine(exportFolder, queuedFile.Subfolder), exportFilename));
 						}
 						catch (Exception ex)
 						{
@@ -486,7 +486,7 @@ namespace fiQ.TaskAdapters
 				else
 				{
 					var boundColumns = new List<OutputColumnBound>();
-					string exportFilePath = Path.Combine(exportFolder, filename);
+					string exportFilePath = TaskUtilities.General.PathCombine(exportFolder, filename);
 
 					// Check for an explicit column listing for this table:
 					var outputColumnList = outputColumnListSet?.GetOutputColumnList(tblidx);

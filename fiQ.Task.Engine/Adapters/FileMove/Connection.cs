@@ -106,15 +106,13 @@ namespace fiQ.TaskAdapters.FileMove
 		public abstract HashSet<DownloadFile> GetFileList(List<SourceFilePath> paths);
 		public abstract Task DoTransfer(string folderPath, string fileName, Stream writestream);
 		public abstract void DeleteFile(string folderPath, string fileName);
+		public abstract void SourceRenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite);
 		#endregion
 
 		#region Abstract methods - File transfer (destination mode)
 		public abstract StreamPath GetWriteStream(string folderPath, string fileName, bool preventOverwrite);
 		public abstract Task FinalizeWrite(StreamPath streampath);
-		#endregion
-
-		#region Abstract methods - File management
-		public abstract void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite);
+		public abstract void DestRenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite);
 		#endregion
 
 		#region Virtual methods - Simple method file transfer (default not supported)

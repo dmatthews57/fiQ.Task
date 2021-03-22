@@ -30,7 +30,7 @@ namespace fiQ.TaskAdapters
 			{
 				#region Retrieve task parameters
 				// Retrieve and validate required parameters first:
-				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string sourceFolder = parameters.GetFolder("SourceFolder", dateTimeNow);
 				string filenameFilter = parameters.GetString("FilenameFilter", null, dateTimeNow);
 				var maxAge = parameters.Get<TimeSpan>("MaxAge", TimeSpan.TryParse);
 				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter) || maxAge == null)
@@ -50,7 +50,7 @@ namespace fiQ.TaskAdapters
 				string archiveFolder = parameters.GetString("ArchiveFolder");
 				if (!string.IsNullOrEmpty(archiveFolder))
 				{
-					if (!TaskUtilities.General.REGEX_DIRPATH.IsMatch(archiveFolder))
+					if (!TaskUtilities.General.REGEX_FOLDERPATH.IsMatch(archiveFolder))
 					{
 						throw new ArgumentException("Invalid ArchiveFolder specified");
 					}
@@ -110,12 +110,12 @@ namespace fiQ.TaskAdapters
 								// If regular expression/replacement not provided, append simple archive filename in date-based format:
 								if (archiveRenameRegex == null)
 								{
-									archiveFilePath = Path.Combine(archiveFilePath, $"{file.LastWriteTime:yyyy-MM}.zip");
+									archiveFilePath = TaskUtilities.General.PathCombine(archiveFilePath, $"{file.LastWriteTime:yyyy-MM}.zip");
 								}
 								// Otherwise append archive filename constructed using regex/replacement:
 								else
 								{
-									archiveFilePath = Path.Combine(archiveFilePath,
+									archiveFilePath = TaskUtilities.General.PathCombine(archiveFilePath,
 										$"{archiveRenameRegex.Replace(Path.GetFileNameWithoutExtension(file.FileName), TaskUtilities.General.ApplyDateMacros(archiveRenameReplacement, file.LastWriteTime))}.zip");
 								}
 
@@ -125,11 +125,10 @@ namespace fiQ.TaskAdapters
 									// Determine path within zip under which this file will be placed: start with path
 									// relative to our working folder (in case we are recursing subfolders), prefixed
 									// with explicit subfolder name, if configured:
-									string relativePath = Uri.UnescapeDataString(new Uri(sourceFolder).MakeRelativeUri(new Uri(file.FileName)).ToString())
-										.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+									string relativePath = Uri.UnescapeDataString(new Uri(sourceFolder).MakeRelativeUri(new Uri(file.FileName)).ToString());
 									if (!string.IsNullOrEmpty(archiveSubfolder))
 									{
-										relativePath = Path.Combine(TaskUtilities.General.ApplyDateMacros(archiveSubfolder, file.LastWriteTime), relativePath);
+										relativePath = TaskUtilities.General.PathCombine(TaskUtilities.General.ApplyDateMacros(archiveSubfolder, file.LastWriteTime), relativePath);
 									}
 
 									// Check whether this path already exists within this zip archive:

@@ -155,19 +155,22 @@ namespace fiQ
 				throw new LoadAdapterException(10, "TaskAdapter class name not provided");
 			}
 
+			// Build path of adapter DLL, if specified (looking in current folder, if no path provided):
+			string adapterDLLPath = string.IsNullOrEmpty(task.AdapterDLLName) ? null
+				: TaskUtilities.General.PathCombine(string.IsNullOrEmpty(task.AdapterDLLPath) ? AppDomain.CurrentDomain.BaseDirectory : task.AdapterDLLPath, task.AdapterDLLName);
+
 			try
 			{
 				// Load Assembly from DLL name (if provided - otherwise look in "this" Assembly):
-				var assembly = string.IsNullOrEmpty(task.AdapterDLLName) ? Assembly.GetExecutingAssembly()
-					: Assembly.LoadFrom(Path.Combine(string.IsNullOrEmpty(task.AdapterDLLPath) ? AppDomain.CurrentDomain.BaseDirectory : task.AdapterDLLPath, task.AdapterDLLName));
+				var assembly = string.IsNullOrEmpty(adapterDLLPath) ? Assembly.GetExecutingAssembly() : Assembly.LoadFrom(adapterDLLPath);
 				if (assembly == null)
 				{
-					throw BuildLoadAdapterException(11, new ArgumentException("Invalid DLL path/name, or assembly not loaded"), task);
+					throw BuildLoadAdapterException(11, new ArgumentException("Invalid DLL path/name, or assembly not loaded"), task.AdapterClassName, adapterDLLPath);
 				}
 
 				// Retrieve collection of types from assembly with a base type of TaskAdapter:
 				var assemblyTypes = assembly.GetTypes()?.Where(t => t.IsSubclassOf(typeof(TaskAdapter)));
-				if (assemblyTypes?.Any() ?? throw BuildLoadAdapterException(12, new ArgumentException("Assembly contains no TaskAdapters"), task))
+				if (assemblyTypes?.Any() ?? throw BuildLoadAdapterException(12, new ArgumentException("Assembly contains no TaskAdapters"), task.AdapterClassName, adapterDLLPath))
 				{
 					// Locate assembly with matching name (short or fully-qualified):
 					foreach (var type in assemblyTypes)
@@ -183,7 +186,7 @@ namespace fiQ
 				}
 
 				// If this point is reached, class was not found:
-				throw BuildLoadAdapterException(13, new ArgumentException("Specified class not found in assembly"), task);
+				throw BuildLoadAdapterException(13, new ArgumentException("Specified class not found in assembly"), task.AdapterClassName, adapterDLLPath);
 			}
 			catch (LoadAdapterException)
 			{
@@ -191,22 +194,18 @@ namespace fiQ
 			}
 			catch (Exception ex)
 			{
-				throw BuildLoadAdapterException(14, ex, task);
+				throw BuildLoadAdapterException(14, ex, task.AdapterClassName, adapterDLLPath);
 			}
 		}
 
 		/// <summary>
 		/// Construct a LoadAdapterException with provided return value and nested exception
 		/// </summary>
-		private static LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, TaskParameters task)
+		private static LoadAdapterException BuildLoadAdapterException(int errorCode, Exception ex, string adapterClassName, string adapterDLLPath)
 		{
 			return new LoadAdapterException(
 				errorCode,
-				// Format outer exception error string combining arguments to allow client to see what was attempted:
-				string.Concat("Error initializing adapter ",
-					string.IsNullOrEmpty(task.AdapterDLLName) ? string.Empty : (string.IsNullOrEmpty(task.AdapterDLLPath) ? task.AdapterDLLName : Path.Combine(task.AdapterDLLPath, task.AdapterDLLName)),
-					"::",
-					task.AdapterClassName),
+				$"Error initializing adapter {(string.IsNullOrEmpty(adapterDLLPath) ? adapterClassName : $"{adapterDLLPath}::{adapterClassName}")}",
 				ex);
 		}
 		#endregion

@@ -62,7 +62,7 @@ namespace fiQ.TaskModels
 		/// </summary>
 		/// <param name="name">Name/dictionary key of parameter to retrieve</param>
 		/// <param name="parmRegex">Optional Regex object to apply to parameter</param>
-		/// <param name="processDateMacros">If set to true, date macros in value will be applied</param>
+		/// <param name="applyMacroTime">If non-null, will be applied to date macros in value</param>
 		/// <returns>Null if value does not match Regex, otherwise value (string.Empty if not found)</returns>
 		public string GetString(string name, Regex parmRegex = null, DateTime? applyMacroTime = null)
 		{
@@ -101,6 +101,25 @@ namespace fiQ.TaskModels
 			}
 			// Default to false (if not configured, or not a "true" value):
 			return false;
+		}
+
+		/// <summary>
+		/// Retrieve folder/path value from parameter collection
+		/// </summary>
+		/// <returns>
+		/// string.Empty if not found, otherwise value with provided date/time applied to macros and backslashes
+		/// replaced with forward slashes:
+		/// </returns>
+		public string GetFolder(string name, DateTime applyMacroTime)
+		{
+			if (parameters.ContainsKey(name))
+			{
+				// Apply date/time value to any date macros, validate with regex:
+				string value = TaskUtilities.General.ApplyDateMacros(parameters[name], applyMacroTime);
+				return TaskUtilities.General.REGEX_FOLDERPATH.IsMatch(value) ? value.Replace('\\', '/')
+					: throw new ArgumentException($"{name} is not a valid folder/path");
+			}
+			return string.Empty;
 		}
 
 		/// <summary>

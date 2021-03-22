@@ -174,7 +174,7 @@ namespace fiQ.TaskAdapters
 								#region Perform file transfer
 								// Apply file rename, if appropriate:
 								string destFileName = (fileRenameRegex == null || fileRenameDefer) ? file.fileName : fileRenameRegex.Replace(file.fileName, fileRenameReplacement);
-								logger.LogDebug($"File will be transferred to {(string.IsNullOrEmpty(file.DestinationSubfolder) ? destFileName : Path.Combine(file.DestinationSubfolder, destFileName))}");
+								logger.LogDebug($"File will be transferred to {(string.IsNullOrEmpty(file.DestinationSubfolder) ? destFileName : TaskUtilities.General.PathCombine(file.DestinationSubfolder, destFileName))}");
 
 								// If simple copy method supported by this source/dest combination, perform now:
 								if (destConnection.SupportsSimpleCopy(sourceConnection))
@@ -212,7 +212,7 @@ namespace fiQ.TaskAdapters
 								{
 									var renameFile = fileRenameRegex.Replace(destFileName, fileRenameReplacement);
 									logscope.AddToState("DestFileRenamePath", renameFile);
-									destConnection.RenameFile(file.DestinationSubfolder, destFileName, renameFile, preventOverwrite);
+									destConnection.DestRenameFile(file.DestinationSubfolder, destFileName, renameFile, preventOverwrite);
 									logger.LogInformation("File renamed at destination", renameFile);
 								}
 								#endregion
@@ -223,7 +223,7 @@ namespace fiQ.TaskAdapters
 									if (sourceFileRenameRegex != null)
 									{
 										var renameFile = sourceFileRenameRegex.Replace(file.fileName, sourceFileRenameReplacement);
-										sourceConnection.RenameFile(file.fileFolder, file.fileName, renameFile, preventOverwrite);
+										sourceConnection.SourceRenameFile(file.fileFolder, file.fileName, renameFile, preventOverwrite);
 										logger.LogDebug($"Source file renamed to {renameFile}");
 									}
 								}
@@ -239,7 +239,7 @@ namespace fiQ.TaskAdapters
 								logger.LogError(ex, "Error downloading file");
 								if (!suppressErrors)
 								{
-									result.AddException(new Exception($"Error downloading file {Path.Combine(file.fileFolder ?? string.Empty, file.fileName)}", ex));
+									result.AddException(new Exception($"Error downloading file {TaskUtilities.General.PathCombine(file.fileFolder, file.fileName)}", ex));
 								}
 								continue;
 							}

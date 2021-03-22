@@ -32,7 +32,7 @@ namespace fiQ.TaskAdapters
 			try
 			{
 				#region Retrieve task parameters
-				string sourceFolder = parameters.GetString("SourceFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string sourceFolder = parameters.GetFolder("SourceFolder", dateTimeNow);
 				string filenameFilter = parameters.GetString("FilenameFilter", null, dateTimeNow);
 				if (string.IsNullOrEmpty(sourceFolder) || string.IsNullOrEmpty(filenameFilter))
 				{

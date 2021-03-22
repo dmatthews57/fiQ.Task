@@ -53,6 +53,13 @@ namespace fiQ.TaskAdapters.FileMove
 		{
 			throw new InvalidOperationException("Email not valid as source connection");
 		}
+		/// <summary>
+		/// Rename specified file at source
+		/// </summary>
+		public override void SourceRenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
+		{
+			throw new InvalidOperationException("Email not valid as source connection");
+		}
 		#endregion
 
 		#region Connection implementation - File transfer (destination mode)
@@ -84,13 +91,10 @@ namespace fiQ.TaskAdapters.FileMove
 				attachment: streampath.stream,
 				attachmentName: streampath.path);
 		}
-		#endregion
-
-		#region Connection implementation - File management
 		/// <summary>
-		/// Rename specified file (no action required, ignore)
+		/// Perform deferred rename of file at destination (no action required, ignore)
 		/// </summary>
-		public override void RenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
+		public override void DestRenameFile(string folderPath, string fileName, string newFileName, bool preventOverwrite)
 		{
 		}
 		#endregion

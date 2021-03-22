@@ -15,7 +15,7 @@ namespace fiQ.TaskCmd
 	{
 		static void Main(string[] args)
 		{
-			TaskEngineConfig engineConfig = new TaskEngineConfig(); // Engine execution parameter collection
+			var engineConfig = new TaskEngineConfig(); // Engine execution parameter collection
 			string jobName = null; // For logging purposes
 			string taskFileName = null; // For running a single file
 			string taskFolderName = null; // For running all files in a folder
@@ -39,13 +39,11 @@ namespace fiQ.TaskCmd
 				#region Parse command-line arguments
 				// Name/value pairs with an "@" prefix are TaskParameter override values:
 				var REGEX_TASKPARM = new Regex(@"^@(?<name>\S+)[=](?<value>.+)$");
+				// Flag-only parameters (i.e. not a name/value pair):
+				var REGEX_FLAGPARM = new Regex(@"^(--|-|/)?(?<value>[\S-[=]]+)$");
 				// Other name/value pairs (optionally starting with any of "-", "--" or "/") are program-level:
 				var REGEX_NAMEDPARM = new Regex(@"^(--|-|/)?(?<name>\S+)[=](?<value>.+)$");
 				var REGEX_NAMEDPARM_SHORTKEY = new Regex(@"^-(?![-])");
-				// Flag-only parameters (i.e. not a name/value pair):
-				var REGEX_FLAGPARM = new Regex(@"^(--|-|/)?(?<value>[\S-[=]]+)$");
-				// Regex to capture and strip argument prefix:
-				var REGEX_PARMLEAD = new Regex(@"^(--|-|/)");
 
 				// Iterate through all arguments, looking for recognized values (may short-circuit normal
 				// configuration behavior to allow custom parameters for this application or any adapter)

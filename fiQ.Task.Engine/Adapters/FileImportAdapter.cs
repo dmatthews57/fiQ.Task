@@ -83,7 +83,7 @@ namespace fiQ.TaskAdapters
 				#region Retrieve task parameters
 				string connectionString = config.GetConnectionString(parameters.GetString("ConnectionString"));
 				importProcedureName = parameters.GetString("ImportProcedureName");
-				string importFolder = parameters.GetString("ImportFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string importFolder = parameters.GetFolder("ImportFolder", dateTimeNow);
 				string filenameFilter = parameters.GetString("FilenameFilter", null, dateTimeNow);
 				if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(importProcedureName) || string.IsNullOrEmpty(importFolder) || string.IsNullOrEmpty(filenameFilter))
 				{
@@ -110,12 +110,15 @@ namespace fiQ.TaskAdapters
 				}
 
 				// Retrieve imported file archival settings (either folder or rename regex required):
-				string archiveFolder = parameters.GetString("ArchiveFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string archiveFolder = parameters.GetFolder("ArchiveFolder", dateTimeNow);
 				var archiveRenameRegex = TaskUtilities.General.RegexIfPresent(parameters.GetString("ArchiveRenameRegex"), RegexOptions.IgnoreCase);
 				string archiveRenameReplacement = archiveRenameRegex == null ? null : (parameters.GetString("ArchiveRenameReplacement", null, dateTimeNow) ?? string.Empty);
-				if (string.IsNullOrEmpty(archiveFolder) && archiveRenameRegex == null)
+				if (string.IsNullOrEmpty(archiveFolder))
 				{
-					throw new ArgumentException("Either ArchiveFolder or ArchiveRenameRegex settings required");
+					if (archiveRenameRegex == null)
+					{
+						throw new ArgumentException("Either ArchiveFolder or ArchiveRenameRegex settings required");
+					}
 				}
 				// Create archival folder, if it doesn't already exist:
 				else if (!Directory.Exists(archiveFolder))
@@ -176,7 +179,7 @@ namespace fiQ.TaskAdapters
 							using var importFileScope = logger.BeginScope(new Dictionary<string, object>() { ["FileName"] = fileInfo.FullName });
 
 							// Determine path to archive file to after completion of import process:
-							var archiveFilePath = Path.Combine(string.IsNullOrEmpty(archiveFolder) ? importFolder : archiveFolder,
+							var archiveFilePath = TaskUtilities.General.PathCombine(string.IsNullOrEmpty(archiveFolder) ? importFolder : archiveFolder,
 								archiveRenameRegex == null ? fileInfo.Name : archiveRenameRegex.Replace(fileInfo.Name, archiveRenameReplacement));
 							if (archiveFilePath.Equals(fileInfo.FullName, StringComparison.OrdinalIgnoreCase))
 							{

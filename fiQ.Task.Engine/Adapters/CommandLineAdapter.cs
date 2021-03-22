@@ -40,7 +40,7 @@ namespace fiQ.TaskAdapters
 				}
 
 				// Retrieve optional parameters
-				string workingFolder = parameters.GetString("WorkingFolder", TaskUtilities.General.REGEX_DIRPATH, dateTimeNow);
+				string workingFolder = parameters.GetFolder("WorkingFolder", dateTimeNow);
 				string returnValueRegex = parameters.GetString("ReturnValueRegex");
 				#endregion
 
